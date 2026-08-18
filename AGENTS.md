@@ -1,0 +1,119 @@
+# EvalGuard Repository Instructions
+
+These instructions apply to the entire repository. EvalGuard is a portfolio-grade,
+reproducible evaluation harness for tool-using AI agents in the wholly fictional
+ParcelDesk support domain.
+
+## Current scope
+
+- The active milestone is Phase 0 plus Phase 1 only.
+- Phase 0 establishes the repository, runtime services, database foundation,
+  checks, health endpoints, and durable documentation.
+- Phase 1 delivers one complete queued evaluation: an eligible ParcelDesk refund
+  handled by a deterministic fake provider through `lookup_order` and
+  `issue_refund`, then graded from persisted state and trace evidence.
+- Do not begin Phase 2 or later work unless the user explicitly advances the
+  milestone. Record later ideas in `PLAN.md` instead.
+
+## Engineering rules
+
+- Preserve user-owned files and unrelated working-tree changes.
+- Keep the repository runnable after each milestone and build one verified
+  vertical slice at a time.
+- Prefer focused functions and a straightforward modular package. Do not add a
+  repository, service, interface, or framework layer without a concrete need.
+- Use Python 3.12, `pyproject.toml`, and `uv` when available. Commit the dependency
+  lockfile.
+- Required local workflows must work from PowerShell on Windows. GitHub Actions
+  may run on Ubuntu; do not make Bash the only supported path.
+- Use current mutually compatible dependencies. If behavior is version-sensitive,
+  consult the library's official documentation instead of guessing.
+- Do not weaken, skip, or rewrite a valid test simply to make a check pass.
+- Diagnose failures and record unresolved ones; never describe an unrun command
+  as successful.
+- Never print, copy, or commit secrets. `.env.example` contains names and safe
+  examples only.
+- Do not push, publish, deploy, buy services, or invoke a paid API without the
+  user's explicit permission.
+- If Git author identity is already configured, small local commits are allowed
+  after a milestone is verified. Never invent identity, rewrite history, or
+  backdate a commit.
+
+## Architecture guardrails
+
+- Keep API and worker code in one modular Python application, run as separate
+  processes.
+- PostgreSQL is the source of truth for evaluation records and ParcelDesk business
+  state. Do not use SQLite as a substitute for PostgreSQL integration coverage.
+- Redis and RQ provide background dispatch. Experiment submission persists work
+  before enqueueing it and returns `202 Accepted`; it does not wait for evaluation.
+- Each case execution receives isolated synthetic business state relevant to its
+  case. Phase 1 materializes customer, order, and refund rows; support-ticket state
+  belongs to Phase 2.
+- Business entities stay relational. JSON is reserved for naturally structured
+  fixtures, model/tool payloads, trace payloads, and similar evidence.
+- State-changing tools run transactionally and must be safe against repeated job
+  or tool delivery. Enforce important uniqueness rules in PostgreSQL as well as in
+  application logic.
+- Tools use typed arguments. Record ordered calls, results, failures, and the final
+  structured resolution as trace evidence.
+- Primary correctness comes from deterministic graders that inspect persisted
+  state and traces. An LLM judge is never the primary source of truth.
+- CI and local development must work without an API key through the deterministic
+  fake provider.
+- Evaluation suites are versioned and immutable; reproducibility-relevant case and
+  prompt definitions receive stable hashes.
+
+## Required verification
+
+Before claiming Phase 0/1 complete, run and record the exact commands and results
+for all of the following:
+
+1. Dependency installation from the committed lockfile.
+2. Ruff linting and formatting checks.
+3. mypy type checking.
+4. The full pytest suite, including PostgreSQL integration, RQ worker, API, and
+   end-to-end coverage.
+5. Docker Compose configuration and `docker compose up --build` for API, worker,
+   PostgreSQL, and Redis.
+6. Alembic upgrade against a clean PostgreSQL database.
+7. Liveness behavior and readiness behavior with dependencies both available and
+   unavailable where practical.
+8. Initial suite/scenario loading through a documented command.
+9. A submitted experiment returning `202`, being completed by the worker, and
+   exposing stored state, trace events, and grader results through retrieval APIs.
+10. A negative grader test that demonstrates an absent or incorrect refund fails.
+
+Do not claim the milestone is complete while any acceptance item in `PLAN.md` is
+unchecked or unverified.
+
+## Documentation duties
+
+- `PROJECT_SPEC.md` is the product and architecture contract.
+- `PLAN.md` owns phase status, acceptance criteria, backlog, risks, and blockers.
+- `PROGRESS.md` is chronological evidence: commands actually run, exact results,
+  known failures, and the next action.
+- `DECISIONS.md` records dated decisions, reasons, alternatives, and consequences.
+- `docs/LEARNING_NOTES.md` teaches each major concept in plain language and is
+  updated when the implementation makes that concept concrete.
+- `PROVENANCE.md` tracks independently created domain material, public libraries
+  and references, and the provider behind every reported result.
+- `README.md` describes implemented behavior as implemented and planned behavior
+  as planned. Include only setup commands that have actually been exercised.
+- Update relevant documentation in the same change as behavior, schema, command,
+  or architectural decisions.
+
+## Provenance and evidence
+
+- All ParcelDesk names, customers, orders, policies, prompts, scenarios, fixtures,
+  labels, traces, and graders must be independently created for this project.
+- Never copy, reconstruct, imitate, or include proprietary employer material,
+  terminology, architecture, customer information, datasets, or evaluation assets.
+- Reported counts and performance figures must come from committed code run by a
+  documented command. Never fabricate test/scenario counts, pass rates,
+  defect-detection rates, latency, throughput, tokens, costs, comparisons, or
+  resume metrics.
+- Label fake-provider output as **synthetic infrastructure validation**, never as
+  real-model quality or performance.
+- A real provider remains out of scope until the user approves credentials and
+  possible cost; clearly distinguish any later real-provider results.
