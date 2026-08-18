@@ -214,7 +214,6 @@ closure update follows it as a separate small local commit.
 - PostgreSQL commit and Redis enqueue are separate operations. The API records an
   `enqueue_failed` terminal state and returns `503` if dispatch fails; automated
   recovery belongs to a later phase.
-- Remote GitHub Actions execution is unverified.
 - Remote GitHub Actions execution remains unverified; every required local check is
   complete.
 
