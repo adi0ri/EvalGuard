@@ -2,11 +2,11 @@
 
 ## Status
 
-The Phase 0/1 implementation, local runtime checks, and final repository audit are
-complete; the verified local milestone commit is the only remaining closure step.
-This specification defines both the current vertical slice and the complete V1
-contract. Later-phase features are requirements to preserve in the design, not
-authorization to implement them now.
+Phase 0 and Phase 1 are complete: implementation, local runtime checks, final
+repository audit, and the verified milestone commit all closed successfully. This
+specification defines both the current vertical slice and the complete V1 contract.
+Later-phase features are requirements to preserve in the design, not authorization
+to implement them now.
 
 ## Product outcome
 

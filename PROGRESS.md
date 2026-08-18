@@ -12,8 +12,8 @@ unless otherwise noted.
 2. The Phase 0/1 package, initial Alembic revision, Docker Compose topology, test
    suite, GitHub Actions workflow, and durable documentation were created.
 3. `uv.lock` was generated for Python 3.12. The final
-   documentation/provenance/secret audit completed without a release blocker; the
-   verified local milestone commit is the remaining closure step.
+   documentation/provenance/secret audit completed without a release blocker.
+   Commit `03aaa00` records the verified Phase 0/1 implementation and lockfile.
 4. Final source audit hardening added durable worker start/failure records, guarded
    published-suite membership with serialized database row locks, and a safe
    `prepare-test-db` path for fresh and reused Compose volumes. Four migrations now
@@ -187,7 +187,19 @@ virtual environment, caches, and bytecode are excluded from the commit candidate
 The public dependency versions, action SHA/version mappings, scenario/test counts,
 fake-provider labeling, README commands, durable documents, and current source were
 reconciled by two independent read-only audits. No Phase 0/1 implementation or
-release-hygiene blocker remains before the local milestone commit.
+release-hygiene blocker remains.
+
+## Local milestone commit
+
+Git author identity was already configured and was not changed. The root commit
+was created locally without pushing or publishing:
+
+```text
+03aaa00 feat: complete EvalGuard Phase 0 and Phase 1
+```
+
+The commit recorded 62 files and the generated `uv.lock`. This documentation-only
+closure update follows it as a separate small local commit.
 
 ## Known warnings, limits, and unresolved work
 
@@ -203,13 +215,14 @@ release-hygiene blocker remains before the local milestone commit.
   `enqueue_failed` terminal state and returns `503` if dispatch fails; automated
   recovery belongs to a later phase.
 - Remote GitHub Actions execution is unverified.
-- The verified local milestone commit remains open; Git author identity is already
-  configured and will not be changed.
+- Remote GitHub Actions execution remains unverified; every required local check is
+  complete.
 
 No failed Phase 0/1 implementation or local runtime check is currently known.
 
 ## Precise next action
 
-Create the first verified local milestone commit without changing the configured
-author identity, then record its revision in this log. The precise next unchecked
-phase is Phase 2, which must not begin until the user explicitly advances it.
+The precise next unchecked phase is Phase 2: complete the two remaining typed
+domain tools, add support-ticket/escalation state, and strengthen the planned
+correctness boundaries. Do not begin it until the user explicitly advances the
+milestone.

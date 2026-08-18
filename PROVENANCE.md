@@ -91,7 +91,9 @@ to immutable suite/case rows that carry the version and hashes; those hashes are
 duplicated on each execution row.
 
 The 2026-08-18 live smoke result recorded in `PROGRESS.md` used only this fake
-provider and is labeled synthetic infrastructure validation.
+provider and is labeled synthetic infrastructure validation. Commit `03aaa00`
+records the source, fixtures, deterministic provider, graders, and documentation
+used for the completed Phase 0/1 milestone.
 
 ### Future real provider
 

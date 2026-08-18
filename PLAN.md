@@ -4,9 +4,9 @@ Last updated: 2026-08-18
 
 ## Current milestone
 
-**Phase 0 and Phase 1 — implementation, local runtime verification, and final audit
-complete; verified local milestone commit pending.** Phase 2 and later are backlog
-only.
+**Phase 0 and Phase 1 — complete.** Implementation, local runtime verification,
+final audit, and the verified local milestone commit are complete. Phase 2 and
+later are backlog only.
 
 ## Phase 0 — repository and architecture foundation
 
@@ -22,7 +22,7 @@ only.
 - [x] Create `PROGRESS.md` and record chronological commands and exact results.
 - [x] Confirm `.gitignore` and `.env.example` contain no secrets or generated
   runtime artifacts.
-- [ ] Make the first local milestone commit if Git author identity is already
+- [x] Make the first local milestone commit if Git author identity is already
   configured.
 
 ### Python foundation
@@ -174,6 +174,6 @@ unverified and is not claimed.
 
 ## Precise next action
 
-Create the verified Phase 0/1 local milestone commit using the already-configured
-Git author identity, then record that commit in the durable documents. Do not start
-Phase 2 until the user explicitly advances the milestone.
+The precise next unchecked phase is Phase 2: add `update_shipping_address`,
+`escalate_ticket`, support-ticket/escalation state, and the planned correctness
+hardening. Do not start it until the user explicitly advances the milestone.
