@@ -112,8 +112,8 @@ later are backlog only.
 - [x] Ruff lint and formatting checks pass.
 - [x] mypy passes.
 - [x] pytest passes without substituting SQLite for PostgreSQL integration behavior.
-- [x] GitHub Actions uses commands consistent with local verification (remote
-  workflow execution is not claimed).
+- [x] GitHub Actions uses commands consistent with local verification; the first
+  remote workflow run passed all lint/type, migration/test, and Compose-build jobs.
 - [x] Every README setup/check command has been exercised locally.
 - [x] A final provenance and secret scan finds no proprietary material or secrets.
 - [x] Durable documents match the verified implementation and evidence.
@@ -169,8 +169,7 @@ later are backlog only.
 
 No Phase 0/1 implementation or local-runtime blocker is known. One upstream
 FastAPI/Starlette `TestClient` deprecation warning is recorded in `PROGRESS.md`;
-the full test suite still passes. Remote GitHub Actions execution remains
-unverified and is not claimed.
+the full local and remote test suites still pass.
 
 ## Precise next action
 

@@ -171,8 +171,19 @@ Ruff/mypy, PostgreSQL/Redis migration and schema-drift check plus pytest, and
 Compose configuration/image build verification. Its local commands match the
 successful commands above.
 
-The workflow has **not** been run remotely on GitHub, so no remote CI result is
-claimed.
+The repository was published publicly at
+`https://github.com/adi0ri/EvalGuard`. The first push of `main` at commit
+`7b0bd2e1d280d1ed897c13811f22feb72cb4ff33` triggered GitHub Actions run
+[`32195390241`](https://github.com/adi0ri/EvalGuard/actions/runs/32195390241),
+which completed successfully. Its three jobs reported:
+
+- lint and type-check: passed in 17 seconds;
+- Docker Compose configuration and image build: passed in 25 seconds; and
+- clean PostgreSQL migration, schema-drift check, and pytest: passed in 30 seconds.
+
+This is the first verified remote CI result. The public repository's `main` branch
+was created directly from the already-verified local history; no history was
+rewritten and no pull request was needed for the initial publication.
 
 ## Final repository audit
 
@@ -214,8 +225,6 @@ closure update follows it as a separate small local commit.
 - PostgreSQL commit and Redis enqueue are separate operations. The API records an
   `enqueue_failed` terminal state and returns `503` if dispatch fails; automated
   recovery belongs to a later phase.
-- Remote GitHub Actions execution remains unverified; every required local check is
-  complete.
 
 No failed Phase 0/1 implementation or local runtime check is currently known.
 

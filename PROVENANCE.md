@@ -45,7 +45,7 @@ Transitive packages remain recorded in that lockfile rather than duplicated here
 | Redis container | `redis:7-alpine` | RQ queue transport |
 | Docker / Docker Compose | 29.6.1 / 5.2.0 used for verification | Local image build and multi-process topology |
 | `actions/checkout` / `astral-sh/setup-uv` | 7.0.1 / 10.0.1, pinned by commit SHA | CI checkout and uv installation |
-| GitHub Actions | Workflow present; not run remotely | Planned CI execution of locked checks, tests, migration, and image build |
+| GitHub Actions | Run `32195390241` passed remotely | Locked checks, tests, clean migration, schema-drift check, and image build |
 
 Jinja2/static HTML reporting is planned for Phase 5 but is not an installed or
 implemented Phase 0/1 feature. No real-model SDK is installed.
