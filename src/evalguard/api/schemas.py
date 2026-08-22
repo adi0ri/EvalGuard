@@ -1,4 +1,4 @@
-"""Public request and response contracts for the Phase 1 API."""
+"""Public request and response contracts for the Phase 2 API."""
 
 from datetime import datetime
 from typing import Any, Literal
@@ -85,12 +85,22 @@ class CustomerRead(ApiModel):
     email: str
 
 
+class ShippingAddressRead(ApiModel):
+    line1: str
+    line2: str | None
+    city: str
+    region: str
+    postal_code: str
+    country: str
+
+
 class OrderRead(ApiModel):
     external_id: str
     customer_id: UUID
     total_cents: int
     currency: str
     status: str
+    shipping_address: ShippingAddressRead | None
 
 
 class RefundRead(ApiModel):
@@ -101,6 +111,20 @@ class RefundRead(ApiModel):
     status: str
     reason: str
     tool_call_id: str
+
+
+class SupportTicketRead(ApiModel):
+    id: UUID
+    case_execution_id: UUID
+    customer_id: UUID
+    order_id: UUID
+    reason_code: str
+    reason: str
+    priority: str
+    status: str
+    tool_call_id: str
+    created_at: datetime
+    escalated_at: datetime | None
 
 
 class ExecutionDetail(ApiModel):
@@ -118,6 +142,7 @@ class ExecutionDetail(ApiModel):
     customers: list[CustomerRead] = Field(default_factory=list)
     orders: list[OrderRead] = Field(default_factory=list)
     refunds: list[RefundRead] = Field(default_factory=list)
+    support_tickets: list[SupportTicketRead] = Field(default_factory=list)
     trace_events: list[TraceEventRead] = Field(default_factory=list)
     tool_invocations: list[ToolInvocationRead] = Field(default_factory=list)
     grader_results: list[GraderResultRead] = Field(default_factory=list)

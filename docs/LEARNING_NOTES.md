@@ -1,11 +1,11 @@
 # EvalGuard Learning Notes
 
 These notes explain the architecture in interview-ready language. Sections marked
-**Phase 0/1** are part of the active milestone. Sections marked **Future hardening**
-describe constraints the current design must leave room for; they are not claims
-that the later behavior has been implemented.
+**Phase 0/1/2** describe the verified implementation. Sections marked **Future
+hardening** describe constraints the current design must leave room for; they are
+not claims that the later behavior has been implemented.
 
-## Phase 0/1 concepts
+## Phase 0/1/2 concepts
 
 ### FastAPI request flow
 
@@ -15,8 +15,10 @@ that the later behavior has been implemented.
 - **How it works in EvalGuard:** FastAPI validates an input model, resolves settings
   and a request-scoped SQLAlchemy session, calls focused application/domain code,
   persists the experiment and execution, arranges queue dispatch, commits, and
-  serializes a response. Retrieval routes read durable state; the worker performs
-  evaluation outside the request.
+  serializes a response. A keyed submission uses a dedicated PostgreSQL
+  connection/session and holds its advisory lock across persistence, enqueue, and
+  the recorded dispatch outcome. Retrieval routes read durable state, including
+  shipping addresses and support tickets; the worker evaluates outside the request.
 - **Why this approach:** FastAPI and Pydantic make validation and response contracts
   explicit while dependency injection gives each request a clear resource
   lifecycle.
@@ -54,10 +56,12 @@ that the later behavior has been implemented.
 - **Problem it solves:** Stateful evaluations need durable relationships,
   concurrency-safe invariants, and efficient retrieval—not just serialized blobs.
 - **How it works in EvalGuard:** Current tables model suites, cases, experiments,
-  executions, traces, invocations, grader results, customers, orders, and refunds;
-  support tickets are planned for Phase 2. Foreign keys connect ownership, unique
-  constraints protect experiment/trial and tool-call identities, and indexes
-  support status and ordered execution reads.
+  executions, traces, invocations, grader results, customers, orders with
+  relational shipping-address fields, refunds, and support tickets. Composite
+  foreign keys require a ticket's customer, order, and originating tool call to
+  belong to the same execution. Unique constraints protect experiment/trial,
+  tool-call, refund, and execution/order/reason ticket identities; indexes support
+  status and ordered execution reads.
 - **Why this approach:** PostgreSQL can enforce the same rules under concurrent API
   and worker processes that the application expects in normal code paths.
 - **Alternative and tradeoff:** A single JSON document is easy to snapshot but
@@ -76,10 +80,16 @@ that the later behavior has been implemented.
   related writes either all commit or all roll back.
 - **How it works in EvalGuard:** A session is created for one request or worker unit
   of work, passed explicitly to focused functions, committed at an intentional
-  boundary, rolled back on exception, and closed. In Phase 1, fixture creation,
-  successful tool evidence, refund creation, grading, and completion share one
-  worker transaction. The refund does not mutate the order row. After a failed
-  execution rolls back, a separate transaction records its terminal failure.
+  boundary, rolled back on exception, and closed. Fixture creation, successful tool
+  evidence, refund creation, grading, and completion share one deterministic-worker
+  transaction. State-changing tools first lock the execution row to serialize call
+  identity and trace order, then lock the execution-owned order before policy and
+  mutation decisions. Address, refund, or escalation state and its invocation/trace
+  evidence therefore commit together. Policy/ownership rejections reached after
+  invocation start mark it failed and append `tool_error`; callers that retain the
+  transaction can commit that rejection evidence. The refund does not mutate the
+  order row. A fatal worker failure still rolls back its unit and uses a separate
+  transaction for the terminal execution failure.
 - **Why this approach:** SQLAlchemy 2 provides explicit transaction behavior while
   keeping models and queries typed enough to maintain. Short session lifetimes
   avoid cross-request state and stale identity-map surprises.
@@ -94,19 +104,22 @@ that the later behavior has been implemented.
   scopes atomic business change. Flushing sends SQL, while committing makes the
   complete unit durable.”
 
-The Phase 1 transaction is deliberately long enough to cover the complete local,
-deterministic execution. That keeps the first slice atomic and easy to reason about,
-but it would be a poor fit for a slow network model call because it would hold a
-connection and locks while waiting. A real-provider phase should persist shorter
-steps and make resume/retry behavior explicit.
+The current deterministic-worker transaction is deliberately long enough to cover
+the complete local, deterministic execution. That keeps the first slice atomic and
+easy to reason about, but it would be a poor fit for a slow network model call
+because it would hold a connection and locks while waiting. A real-provider phase
+should persist shorter steps and make resume/retry behavior explicit.
 
 ### Alembic migrations
 
 - **Problem it solves:** Database structure must evolve reproducibly across fresh
   development, CI, and existing databases.
 - **How it works in EvalGuard:** SQLAlchemy models express the application mapping,
-  while committed Alembic revisions define the ordered schema changes. A clean
-  PostgreSQL instance must upgrade to the current head before the milestone closes.
+  while committed Alembic revisions define the ordered schema changes. Revision
+  `20260822_0005` adds six nullable order-address columns plus relational support
+  tickets and their composite ownership constraints. The Phase 2 check upgraded a
+  disposable clean PostgreSQL database through `0005`, downgraded to `0004`,
+  re-upgraded to head, and confirmed no model/migration drift.
 - **Why this approach:** Versioned migrations are reviewable and let schema state
   travel with code. They make deployment changes explicit rather than relying on
   ad hoc table creation.
@@ -146,9 +159,11 @@ steps and make resume/retry behavior explicit.
 - **How it works in EvalGuard:** The case execution moves through explicit states
   such as queued, running, completed, or failed. The job opens its own database
   resources, invokes typed components, and commits the completed path atomically.
-  On error, partial execution/tool evidence rolls back and a fresh transaction
-  stores failed status plus a terminal failure summary. Richer durable partial-step
-  traces and recovery remain Phase 2/4 work.
+  Policy/ownership rejections reached after invocation start can be retained as
+  failed invocations with ordered `tool_error` evidence. On a fatal worker error,
+  its transaction rolls back and a fresh transaction stores failed status plus a
+  terminal failure summary.
+  Recovery across process-crash windows remains Phase 4 work.
 - **Why this approach:** A durable state machine lets clients and operators explain
   what happened independently of RQ's transient process output.
 - **Alternative and tradeoff:** Treating the RQ job status as the only lifecycle
@@ -186,11 +201,14 @@ steps and make resume/retry behavior explicit.
 
 - **Problem it solves:** Model-produced tool input is untrusted structured data and
   must not reach business mutations with missing or malformed fields.
-- **How it works in EvalGuard:** `lookup_order` and `issue_refund` accept explicit
-  Pydantic v2 argument models. Validation happens before domain logic. Successful
-  calls/results are traced; a failure rolls back partial tool evidence and the
-  worker persists a terminal execution-failure summary separately. Durable
-  step-by-step failure traces are later hardening, not a Phase 1 claim.
+- **How it works in EvalGuard:** All four tools—`lookup_order`, `issue_refund`,
+  `update_shipping_address`, and `escalate_ticket`—accept validated Pydantic v2
+  argument models and return typed result models; their object schemas reject
+  undeclared fields. Validation happens before domain logic. Successful
+  calls/results are traced, and policy/ownership rejections after
+  invocation start record a failed invocation plus `tool_error` in the surrounding
+  transaction. A stable call ID replays only when its tool name and validated
+  arguments are exactly the same; conflicting reuse is rejected.
 - **Why this approach:** A narrow typed boundary makes tool contracts testable and
   gives deterministic, explainable failures instead of scattered dictionary access.
 - **Alternative and tradeoff:** Raw dictionaries are flexible but defer errors and
@@ -207,10 +225,12 @@ steps and make resume/retry behavior explicit.
 
 - **Problem it solves:** CI needs to exercise the real orchestration path without
   network variance, credentials, or spend.
-- **How it works in EvalGuard:** For the known Phase 1 case, the fake provider emits
+- **How it works in EvalGuard:** For the one published case, the fake provider emits
   a repeatable sequence that calls `lookup_order`, then `issue_refund`, and returns
   a structured resolution through the same provider/tool boundary intended for a
-  later real adapter.
+  later real adapter. Phase 2 implements and PostgreSQL-tests the other two tools,
+  but the fake does not select them until Phase 3 adds versioned scenarios and
+  graders for those paths.
 - **Why this approach:** It makes failures reproducible while testing more than a
   mocked route or worker. The result establishes infrastructure correctness, not
   model competence.
@@ -275,7 +295,9 @@ steps and make resume/retry behavior explicit.
   invalidate correctness comparisons.
 - **How it works in EvalGuard:** Each case execution receives newly materialized
   synthetic rows linked to its execution identity. Tool queries require the same
-  execution scope, and graders inspect only that scope.
+  execution scope, and graders inspect only that scope. Ticket rows also use
+  composite foreign keys so their customer, order, and tool call cannot be borrowed
+  from another execution even if application code is bypassed.
 - **Why this approach:** It supports concurrency, repeatability, and an unambiguous
   before/after state without global resets.
 - **Alternative and tradeoff:** Rebuilding the entire database for every case gives
@@ -292,11 +314,13 @@ steps and make resume/retry behavior explicit.
 - **Problem it solves:** Final state says what exists, but not how the agent got
   there, which arguments it used, or whether it attempted a forbidden action.
 - **How it works in EvalGuard:** Execution-scoped events receive deterministic
-  sequence numbers. The completed Phase 1 path records provider request/response,
+  sequence numbers. The completed queued path records provider request/response,
   tool calls/results, and grader completion; the structured final resolution also
-  lives on the execution. A failed transaction cannot retain its partial events, so
-  the worker records a separate terminal failure summary. Naturally structured
-  details use JSON while identity and order remain relational.
+  lives on the execution. Policy/ownership rejections reached after invocation
+  start record `tool_call` followed by `tool_error` and a failed invocation. A fatal
+  worker transaction cannot retain partial events, so the worker records a separate
+  terminal failure summary. Naturally structured details use JSON while identity
+  and order remain relational.
 - **Why this approach:** Graders and interviewers can reconstruct causality without
   scraping application logs. State plus trace supports both outcome and process
   correctness.
@@ -315,9 +339,11 @@ steps and make resume/retry behavior explicit.
 - **Problem it solves:** Different defects live at different boundaries, so one test
   style cannot provide fast feedback and realistic system confidence at once.
 - **How it works in EvalGuard:** Unit tests cover pure graders and validation;
-  PostgreSQL integration tests cover transactions, constraints, persistence, and
-  isolation; negative grader tests lock in detection of absent/wrong refunds; and
-  an end-to-end test submits, queues, works, polls, retrieves, and verifies a
+  PostgreSQL integration tests cover accepted/rejected address changes, required
+  escalation, exact replay, semantic and concurrent duplicates, failed-call
+  evidence, constraints, and isolation; negative grader tests lock in detection of
+  absent/wrong refunds; API tests cover same-key concurrency and Phase 2 retrieval;
+  and an end-to-end test submits, queues, works, polls, retrieves, and verifies a
   fake-provider execution. Later defective-agent cases will expand regression
   coverage.
 - **Why this approach:** The pyramid keeps logic failures cheap to diagnose while a
@@ -341,33 +367,65 @@ before truncating or deleting anything. This is defense in depth: isolation come
 from separate targets, and validation prevents a configuration mistake from turning
 test cleanup into development-data cleanup.
 
+### Address and escalation policy
+
+- **Problem it solves:** A typed mutation is not correct merely because its input
+  has the right shape; it must enforce fulfillment and escalation policy against
+  authoritative state.
+- **How it works in EvalGuard:** `update_shipping_address` locks and scopes the order,
+  then permits a change only in `pending` or `processing`. `issue_refund` rejects an
+  order total at or above 50,000 cents, which requires a ticket with reason code
+  `high_value_refund` instead. `escalate_ticket` derives the customer from the
+  execution-owned order and creates one relational ticket per execution, order,
+  and reason code. API retrieval renders address and ticket state explicitly.
+- **Why this approach:** Policy lives next to the transaction that owns the side
+  effect, so every caller receives the same rule and graders can inspect durable
+  state instead of trusting prose.
+- **Alternative and tradeoff:** Encoding policy only in a prompt is flexible but
+  unenforceable. A generic ticket JSON payload is easy to add, but it cannot enforce
+  ownership and semantic uniqueness as strongly as relational keys.
+- **Common failure modes:** Checking status before acquiring the row lock, trusting
+  a caller-supplied customer, creating both a high-value refund and escalation,
+  treating `shipped` as changeable, and storing an escalation outside execution
+  scope.
+- **Interview explanation:** “The model proposes an action; the transaction enforces
+  policy. Fulfillment state decides whether an address can change, and high-value
+  refunds become one execution-scoped escalation rather than a payment mutation.”
+
+### Idempotency and semantic convergence
+
+- **Problem it solves:** HTTP clients, queues, and tool providers may repeat a
+  request after a timeout even when the first attempt reached durable state.
+- **How it works in EvalGuard:** Concurrent experiment requests sharing an
+  `Idempotency-Key` take a deterministic PostgreSQL advisory lock on one dedicated
+  connection/session, held through record persistence, enqueue attempt, and the
+  stored dispatch outcome. Compatible requests converge on one experiment and one
+  initial enqueue; a conflicting experiment intent is rejected. At the tool layer,
+  execution/order locks serialize decisions, a call ID can replay only the same
+  tool and validated arguments, and a new call ID requesting an already-applied
+  address or escalation returns a duplicate result without a second mutation.
+  PostgreSQL uniqueness remains the final invariant boundary.
+- **Why this approach:** Idempotency preserves request identity while semantic
+  convergence handles providers that legitimately assign a new call ID on retry.
+  Holding the API lock through dispatch closes the tested same-key race between the
+  durable row and enqueue outcome.
+- **Alternative and tradeoff:** A pre-insert lookup without a lock races under
+  concurrency. Transaction-scoped locks would release at each commit and cannot
+  cover the following queue call. Holding a session-level advisory lock longer is
+  deliberate but serializes all work for that key.
+- **Common failure modes:** Reusing a call ID for different arguments, releasing the
+  key lock before enqueue, checking semantic duplicates without locking, keeping
+  the idempotency key only in Redis, and assuming this eliminates every distributed
+  crash window.
+- **Interview explanation:** “Retries are expected. Stable identity proves exact
+  replay, semantic checks make new-call retries converge, and database locks plus
+  uniqueness decide the outcome under concurrency.”
+
 ## Future hardening concepts
 
-The following topics are planned constraints. Phase 1 should preserve stable
-identities and transactional boundaries, but full behavior belongs to later phases.
-
-### Idempotency — Phase 1 baseline, Phase 2/4 hardening
-
-- **Problem it solves:** Clients, queues, and providers may repeat requests after a
-  timeout even when the original operation actually succeeded.
-- **How it works in EvalGuard:** The Phase 1 experiment endpoint accepts an
-  `Idempotency-Key`. Compatible replay returns the existing experiment ID; if its
-  dispatch previously reached `enqueue_failed`, replay requeues the existing
-  execution. RQ uses a stable unique job ID, state-changing tools use stable call
-  identities, completed executions short-circuit on replay, and database
-  uniqueness prevents a second refund for the same execution/order. Concurrency,
-  retention, and wider crash-window recovery need deeper later-phase tests.
-- **Why this approach:** Idempotency turns retries into safe replay and protects the
-  invariant at the database boundary, where concurrent requests meet.
-- **Alternative and tradeoff:** Checking for an existing refund in application code
-  is simpler but races under concurrency. Exactly-once messaging sounds attractive
-  but cannot remove every ambiguous failure across distributed boundaries.
-- **Common failure modes:** Reusing a key for a different payload, expiring keys too
-  early, checking after the side effect, storing the key only in Redis, and returning
-  a different semantic result on replay.
-- **Interview explanation:** “Idempotency does not prevent retries; it makes repeated
-  intent converge on one durable outcome, backed by request identity and unique
-  database constraints.”
+The following topics are planned constraints. Phase 0/1/2 preserves stable
+identities, relational evidence, and transactional boundaries, but full recovery
+and scenario/grader breadth belong to later phases.
 
 ### At-least-once job delivery — Phase 4 hardening
 
@@ -452,3 +510,10 @@ identities and transactional boundaries, but full behavior belongs to later phas
     tests provide?
 15. Which claims can fake-provider results support in a portfolio, and how must they
     be labeled?
+16. Why does an address change check fulfillment status while holding an order-row
+    lock?
+17. Why does a high-value refund become an escalation rather than a refund record?
+18. What is the difference between exact call-ID replay and semantic convergence
+    under a new call ID?
+19. Why must the API hold one advisory-lock connection through the enqueue outcome,
+    not merely through experiment insertion?

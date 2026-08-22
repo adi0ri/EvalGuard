@@ -6,13 +6,18 @@ ParcelDesk support domain.
 
 ## Current scope
 
-- The active milestone is Phase 0 plus Phase 1 only.
+- Phase 0, Phase 1, and Phase 2 are complete.
 - Phase 0 establishes the repository, runtime services, database foundation,
   checks, health endpoints, and durable documentation.
 - Phase 1 delivers one complete queued evaluation: an eligible ParcelDesk refund
   handled by a deterministic fake provider through `lookup_order` and
   `issue_refund`, then graded from persisted state and trace evidence.
-- Do not begin Phase 2 or later work unless the user explicitly advances the
+- Phase 2 adds typed `update_shipping_address` and `escalate_ticket` tools,
+  relational shipping-address and support-ticket state, stronger transactional
+  idempotency, and PostgreSQL-backed correctness coverage. The queued fake-provider
+  scenario remains the Phase 1 refund path; Phase 3 owns new versioned scenarios
+  and graders.
+- Do not begin Phase 3 or later work unless the user explicitly advances the
   milestone. Record later ideas in `PLAN.md` instead.
 
 ## Engineering rules
@@ -48,8 +53,8 @@ ParcelDesk support domain.
 - Redis and RQ provide background dispatch. Experiment submission persists work
   before enqueueing it and returns `202 Accepted`; it does not wait for evaluation.
 - Each case execution receives isolated synthetic business state relevant to its
-  case. Phase 1 materializes customer, order, and refund rows; support-ticket state
-  belongs to Phase 2.
+  case. Customer, order, refund, and support-ticket ownership is relational and
+  execution scoped.
 - Business entities stay relational. JSON is reserved for naturally structured
   fixtures, model/tool payloads, trace payloads, and similar evidence.
 - State-changing tools run transactionally and must be safe against repeated job
@@ -66,7 +71,7 @@ ParcelDesk support domain.
 
 ## Required verification
 
-Before claiming Phase 0/1 complete, run and record the exact commands and results
+Before claiming Phase 0/1/2 complete, run and record the exact commands and results
 for all of the following:
 
 1. Dependency installation from the committed lockfile.
@@ -83,6 +88,10 @@ for all of the following:
 9. A submitted experiment returning `202`, being completed by the worker, and
    exposing stored state, trace events, and grader results through retrieval APIs.
 10. A negative grader test that demonstrates an absent or incorrect refund fails.
+11. Phase 2 PostgreSQL tests for accepted and rejected address changes, required
+    escalation, duplicate state-changing calls, execution isolation, and API/RQ
+    integration.
+12. Clean upgrade, downgrade, and re-upgrade coverage for the Phase 2 migration.
 
 Do not claim the milestone is complete while any acceptance item in `PLAN.md` is
 unchecked or unverified.

@@ -2,10 +2,18 @@
 
 ## Independent origin statement
 
-All Phase 0/1 ParcelDesk domain material was independently created for this
-portfolio project. ParcelDesk is a wholly fictional business. Its prompt, scenario,
-customer/order fixture, tool behavior, grader criteria, traces, labels, and result
-wording are synthetic and authored specifically for EvalGuard.
+All Phase 0–2 ParcelDesk domain material was independently created for this
+portfolio project. ParcelDesk is a wholly fictional business. Its prompts,
+scenario, customer/order/address fixtures, support tickets, escalation reasons,
+tool behavior, grader criteria, policies, traces, labels, and result wording are
+synthetic and authored specifically for EvalGuard.
+
+Phase 2 added original fictional shipping addresses in Port Aurora, original
+support-ticket reason codes and wording, and project-specific policies for
+pre-shipment address changes and high-value refund escalation. These names,
+addresses, ticket fields, thresholds, and rules were written for EvalGuard; they
+were not adapted from an employer, vendor, support platform, policy corpus, or
+real customer interaction.
 
 No proprietary material from any employer or other private source was used. This
 project must not copy, reconstruct, imitate, or include employer code, prompts,
@@ -48,7 +56,7 @@ Transitive packages remain recorded in that lockfile rather than duplicated here
 | GitHub Actions | Run `32195390241` passed remotely | Locked checks, tests, clean migration, schema-drift check, and image build |
 
 Jinja2/static HTML reporting is planned for Phase 5 but is not an installed or
-implemented Phase 0/1 feature. No real-model SDK is installed.
+implemented Phase 0–2 feature. No real-model SDK is installed.
 
 ## Official reference ledger
 
@@ -73,11 +81,15 @@ checks, and CI configuration; they are not domain-content sources.
 | 2026-08-18 | [Ruff documentation](https://docs.astral.sh/ruff/) and [mypy documentation](https://mypy.readthedocs.io/en/stable/) | Lint/format and strict type-check configuration |
 | 2026-08-18 | [GitHub Actions documentation](https://docs.github.com/en/actions) | Ubuntu CI jobs and service containers |
 
+Phase 2 reused the first-party Pydantic, SQLAlchemy, PostgreSQL, Alembic, FastAPI,
+Redis/RQ, pytest, and Docker documentation already listed above. No third-party
+domain policy, scenario, address, ticket, or dataset became an input.
+
 ## Provider and result labeling
 
 ### Deterministic fake provider
 
-Phase 1, local development, and CI use the in-repository deterministic fake
+Phases 1 and 2, local development, and CI use the in-repository deterministic fake
 provider. Every output from that path is **synthetic infrastructure validation**.
 It can show that API submission, Redis/RQ dispatch, typed tool execution,
 transactions, tracing, deterministic grading, and retrieval work together. It
@@ -86,14 +98,30 @@ consumption, or cost.
 
 For each reported fake-provider experiment, retain the suite/case version and
 definition hashes, provider identity, trial identity, raw trace, persisted grader
-evidence, exact command, and code revision when available. Phase 1 executions link
-to immutable suite/case rows that carry the version and hashes; those hashes are not
-duplicated on each execution row.
+evidence, exact command, and code revision when available. Phase 1 and Phase 2
+executions link to immutable suite/case rows that carry the version and hashes;
+those hashes are not duplicated on each execution row.
 
 The 2026-08-18 live smoke result recorded in `PROGRESS.md` used only this fake
 provider and is labeled synthetic infrastructure validation. Commit `03aaa00`
 records the source, fixtures, deterministic provider, graders, and documentation
 used for the completed Phase 0/1 milestone.
+
+The 2026-08-22 Phase 2 verification recorded in `PROGRESS.md` also used only the
+deterministic fake provider and synthetic fixtures. The final automated suite
+collected 49 tests and passed all 49; the live Compose smoke completed the one
+existing immutable refund execution with its persisted state, two tool
+invocations, seven trace events, and four passing deterministic grader results.
+Those counts are repository/runtime evidence, not a model-quality benchmark.
+
+The queued fake-provider scenario intentionally remains the Phase 1
+`lookup_order`/`issue_refund` path. Phase 2's `update_shipping_address` and
+`escalate_ticket` tools are exercised directly through the same production
+`ToolRuntime` in deterministic PostgreSQL tests, with their relational state
+verified through the API. RQ worker and end-to-end tests confirm that the queued
+baseline remains compatible with the new schema. A queued scenario that asks the
+provider to select either new tool, and the broader deterministic grader coverage
+for those scenarios, belongs to Phase 3 and is not claimed here.
 
 ### Future real provider
 
@@ -104,7 +132,7 @@ configuration, suite/case versions and hashes, run date, trial count, raw result
 location, exact reproducible command, and measured token/cost/latency source. It
 must be reported separately from fake-provider validation.
 
-No real provider or paid API was invoked for Phase 0/1.
+No real provider or paid API was invoked for Phase 0–2.
 
 ## Metrics integrity
 
@@ -125,7 +153,7 @@ Planned fixed quantities, such as the V1 contract of exactly 25 scenarios and th
 planned 25-case × two-prompt × three-trial comparison of 150 executions, must be
 described as targets until generated and verified.
 
-## Final milestone integrity check (complete)
+## Phase 0–2 milestone integrity check (complete)
 
 - [x] Confirm all ParcelDesk domain assets were independently authored.
 - [x] Search repository files for secrets, credentials, real customer data, and
@@ -136,3 +164,7 @@ described as targets until generated and verified.
 - [x] Ensure `README.md`, `PROGRESS.md`, and result reports make no unverified
   claims.
 - [x] Recheck the public dependency versions and official references above.
+- [x] Confirm Phase 2 address, ticket, escalation, and policy material is original
+  synthetic ParcelDesk content.
+- [x] Distinguish direct PostgreSQL/API verification of the new tools from the
+  unchanged queued fake-provider refund scenario.

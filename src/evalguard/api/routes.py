@@ -1,11 +1,15 @@
-"""Phase 1 suite, experiment, and execution endpoints."""
+"""Phase 2 suite, experiment, and execution endpoints."""
 
+import hashlib
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy import func, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from evalguard.api.schemas import (
@@ -18,7 +22,9 @@ from evalguard.api.schemas import (
     GraderResultRead,
     OrderRead,
     RefundRead,
+    ShippingAddressRead,
     SuiteSummary,
+    SupportTicketRead,
     ToolInvocationRead,
     TraceEventRead,
 )
@@ -31,6 +37,7 @@ from evalguard.db.models import (
     GraderResult,
     Order,
     Refund,
+    SupportTicket,
     ToolInvocation,
     TraceEvent,
 )
@@ -40,6 +47,62 @@ from evalguard.workers.queue import enqueue_execution
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
 SessionDependency = Annotated[Session, Depends(get_db)]
+
+
+def _idempotency_advisory_lock_id(idempotency_key: str) -> int:
+    """Map an opaque request key to PostgreSQL's signed 64-bit lock namespace."""
+    digest = hashlib.sha256(f"evalguard:experiment:{idempotency_key}".encode()).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+@contextmanager
+def _idempotency_submission_session(
+    session: Session,
+    idempotency_key: str,
+) -> Iterator[Session]:
+    """Use one connection for key serialization, persistence, and dispatch status."""
+
+    lock_id = _idempotency_advisory_lock_id(idempotency_key)
+    bind = session.get_bind()
+    if not isinstance(bind, Engine):
+        raise RuntimeError("Idempotency locking requires an engine-bound database session")
+
+    with bind.connect() as lock_connection:
+        locked_session = Session(bind=lock_connection, expire_on_commit=False)
+        locked_session.execute(select(func.pg_advisory_lock(lock_id)))
+        locked_session.commit()
+        try:
+            yield locked_session
+        finally:
+            try:
+                locked_session.rollback()
+                unlocked = locked_session.scalar(select(func.pg_advisory_unlock(lock_id)))
+                locked_session.commit()
+                if unlocked is not True:
+                    logger.error(
+                        "Failed to release experiment idempotency lock",
+                        extra={"event": "idempotency_unlock_failed", "lock_id": lock_id},
+                    )
+            finally:
+                locked_session.close()
+
+
+def _shipping_address(order: Order) -> ShippingAddressRead | None:
+    line1 = order.shipping_address_line1
+    city = order.shipping_city
+    region = order.shipping_region
+    postal_code = order.shipping_postal_code
+    country = order.shipping_country
+    if line1 is None or city is None or region is None or postal_code is None or country is None:
+        return None
+    return ShippingAddressRead(
+        line1=line1,
+        line2=order.shipping_address_line2,
+        city=city,
+        region=region,
+        postal_code=postal_code,
+        country=country,
+    )
 
 
 def _execution_ids(session: Session, experiment_id: UUID) -> list[UUID]:
@@ -140,19 +203,11 @@ def list_suites(session: SessionDependency) -> list[SuiteSummary]:
     ]
 
 
-@router.post(
-    "/experiments",
-    response_model=ExperimentAccepted,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def create_experiment(
+def _create_experiment(
     payload: ExperimentCreate,
     response: Response,
-    session: SessionDependency,
-    idempotency_key: Annotated[
-        str | None,
-        Header(alias="Idempotency-Key", min_length=1, max_length=255),
-    ] = None,
+    session: Session,
+    idempotency_key: str | None,
 ) -> ExperimentAccepted:
     suite = session.scalar(
         select(EvaluationSuite).where(
@@ -227,6 +282,27 @@ def create_experiment(
     )
 
 
+@router.post(
+    "/experiments",
+    response_model=ExperimentAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_experiment(
+    payload: ExperimentCreate,
+    response: Response,
+    session: SessionDependency,
+    idempotency_key: Annotated[
+        str | None,
+        Header(alias="Idempotency-Key", min_length=1, max_length=255),
+    ] = None,
+) -> ExperimentAccepted:
+    if idempotency_key is None:
+        return _create_experiment(payload, response, session, idempotency_key)
+
+    with _idempotency_submission_session(session, idempotency_key) as locked_session:
+        return _create_experiment(payload, response, locked_session, idempotency_key)
+
+
 @router.get("/experiments/{experiment_id}", response_model=ExperimentDetail)
 def get_experiment(experiment_id: UUID, session: SessionDependency) -> ExperimentDetail:
     experiment = session.get(Experiment, experiment_id)
@@ -282,6 +358,11 @@ def _execution_records(session: Session, case_execution_id: UUID) -> dict[str, A
             .where(Refund.case_execution_id == case_execution_id)
             .order_by(Refund.created_at, Refund.id)
         ).all(),
+        "support_tickets": session.scalars(
+            select(SupportTicket)
+            .where(SupportTicket.case_execution_id == case_execution_id)
+            .order_by(SupportTicket.created_at, SupportTicket.id)
+        ).all(),
         "trace_events": session.scalars(
             select(TraceEvent)
             .where(TraceEvent.case_execution_id == case_execution_id)
@@ -333,6 +414,7 @@ def get_execution(execution_id: UUID, session: SessionDependency) -> ExecutionDe
                 total_cents=row.total_cents,
                 currency=row.currency,
                 status=row.status,
+                shipping_address=_shipping_address(row),
             )
             for row in records["orders"]
         ],
@@ -347,6 +429,22 @@ def get_execution(execution_id: UUID, session: SessionDependency) -> ExecutionDe
                 tool_call_id=row.tool_call_id,
             )
             for row in records["refunds"]
+        ],
+        support_tickets=[
+            SupportTicketRead(
+                id=row.id,
+                case_execution_id=row.case_execution_id,
+                customer_id=row.customer_id,
+                order_id=row.order_id,
+                reason_code=row.reason_code,
+                reason=row.reason,
+                priority=row.priority,
+                status=row.status,
+                tool_call_id=row.tool_call_id,
+                created_at=row.created_at,
+                escalated_at=row.escalated_at,
+            )
+            for row in records["support_tickets"]
         ],
         trace_events=[
             TraceEventRead(

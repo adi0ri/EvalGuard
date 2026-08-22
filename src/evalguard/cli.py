@@ -20,7 +20,7 @@ from evalguard.evaluation.suite import seed_initial_suite
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="evalguard")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("seed", help="Load or verify the Phase 1 suite and scenario")
+    subparsers.add_parser("seed", help="Load or verify the immutable baseline suite and scenario")
     subparsers.add_parser(
         "prepare-test-db",
         help="Create and migrate the isolated PostgreSQL database used by pytest",

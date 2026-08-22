@@ -1,9 +1,10 @@
 # EvalGuard
 
 EvalGuard is a reproducible evaluation harness for tool-using AI agents in the
-wholly fictional ParcelDesk support domain. Phase 0 and Phase 1 implement one real,
-queued vertical slice: a deterministic fake provider looks up an eligible delivered
-order, issues its refund through typed tools, and is graded from persisted
+wholly fictional ParcelDesk support domain. Phases 0–2 implement the runtime
+foundation, one complete queued evaluation, all four typed domain tools, relational
+support state, and correctness hardening. The deterministic queued slice looks up
+an eligible delivered order, issues its refund, and is graded from persisted
 PostgreSQL state and ordered trace evidence.
 
 This result is **synthetic infrastructure validation**. It proves that the local
@@ -14,21 +15,33 @@ together; it is not evidence of real-model quality, latency, token usage, or cos
 
 - A Python 3.12 modular application with separate FastAPI and RQ worker processes.
 - PostgreSQL-backed suites, cases, experiments, executions, customers, orders,
-  refunds, tool invocations, trace events, and criterion-level grader results.
+  shipping addresses, refunds, support tickets, tool invocations, trace events, and
+  criterion-level grader results.
 - Redis/RQ background dispatch. Experiment submission persists records before
   enqueueing and returns `202 Accepted`.
 - One published/immutable suite, `parceldesk-refunds@1.0.0`, containing one
   independently authored `eligible-refund` case with stable SHA-256 definition
   hashes. PostgreSQL trigger row locks serialize publication with case membership
   changes and reject edits, deletion, moves, or appended cases after publication.
-- Typed `lookup_order` and `issue_refund` tools, execution-scoped business state,
-  duplicate-refund constraints, and a deterministic fake provider.
+- Typed `lookup_order`, `issue_refund`, `update_shipping_address`, and
+  `escalate_ticket` tools with validated, closed Pydantic object contracts and a
+  deterministic fake provider.
+- Execution-scoped composite ownership for support tickets. Address changes are
+  allowed only for `pending`/`processing` orders; refunds at or above 50,000 cents
+  require a `high_value_refund` escalation.
+- State-changing calls lock their execution/order rows, replay a call ID only for
+  the exact same validated intent, converge semantic duplicates, and retain failed
+  invocation plus ordered `tool_error` evidence for policy/ownership rejections
+  reached after invocation start when the surrounding transaction is retained.
+- Same-key experiment submissions use a PostgreSQL advisory lock on one dedicated
+  connection/session through persistence, enqueue, and dispatch outcome.
 - A deterministic grader with four criteria covering the refund record, amount,
   tool order, and structured final resolution.
 - Dependency-independent liveness and PostgreSQL/Redis-aware readiness probes.
-- Four Alembic revisions (`20260818_0001` through `20260818_0004`) for the initial
-  schema, suite sealing, case-move protection, and publication serialization; JSON
-  structured logging; Docker Compose; and a GitHub Actions workflow.
+- Five Alembic revisions (`20260818_0001` through `20260822_0005`) for the initial
+  schema, suite sealing, case-move protection, publication serialization, order
+  address fields, and relational support tickets; JSON structured logging; Docker
+  Compose; and a GitHub Actions workflow.
 
 ## Architecture
 
@@ -48,9 +61,16 @@ RQ worker
 ```
 
 PostgreSQL is the durable source of truth. Redis transports work; it does not own
-evaluation or ParcelDesk business state. The deterministic Phase 1 worker holds one
+evaluation or ParcelDesk business state. The deterministic queued worker holds one
 database transaction for the complete execution. A future network provider will
 need shorter durable steps and explicit recovery behavior.
+
+Phase 2 extends the production `ToolRuntime` with address change and escalation
+paths and exposes their relational state through execution retrieval. The single
+published queued fake-provider case still selects only `lookup_order` followed by
+`issue_refund`; Phase 3 will add the immutable scenarios and deterministic graders
+that select the other tools. This boundary keeps Phase 2 from claiming scenario or
+model-quality coverage that has not been built.
 
 ## Tested local setup (PowerShell)
 
@@ -92,10 +112,12 @@ The experiment endpoint accepts this JSON shape and an optional
 }
 ```
 
-It returns `202` with experiment and execution IDs. Poll
+It returns `202` with experiment and execution IDs. Concurrent compatible requests
+using the same key converge on one experiment and initial enqueue. Poll
 `GET /api/v1/experiments/{experiment_id}`, then retrieve the stored customer,
-order, refund, tool invocations, ordered trace, structured resolution, and grader
-results from `GET /api/v1/executions/{execution_id}`.
+order (including a structured shipping address when present), refund, support
+ticket, tool invocations, ordered trace, structured resolution, and grader results
+from `GET /api/v1/executions/{execution_id}`.
 
 ## Checks
 
@@ -117,14 +139,20 @@ the database ends in `_test`, and Redis uses a non-development database/queue. T
 default isolated targets are PostgreSQL `evalguard_test`, Redis database 15, and
 queue `evalguard-tests`.
 
-The 2026-08-18 verification checked 49 locked packages; Ruff lint passed; Ruff
-format checked 50 files; mypy succeeded on 27 source files; and pytest passed all
-32 collected tests in 9.73 seconds. Pytest emitted one dependency-originated
+The 2026-08-22 Phase 2 verification checked 49 locked packages in 4 ms; Ruff lint
+passed; Ruff format checked 52 files; mypy succeeded on 27 source files; and pytest
+passed all 49 collected tests in 15.85 seconds. Pytest emitted one dependency-originated
 `StarletteDeprecationWarning` from FastAPI's `TestClient`; it did not fail the run.
-See `PROGRESS.md` for the exact command evidence, clean-database migration check,
-live API/worker smoke result, dependency-failure probe, and final repository audit.
+The disposable migration check upgraded a clean database from `0001` through
+`0005`, downgraded `0005` to `0004`, re-upgraded, and reported no drift. Compose
+build/up/wait succeeded; the live smoke returned liveness/readiness `200`, accepted
+a submission with `202`, and completed one baseline execution with one refund,
+seven trace events, and four passing graders. Its null address and zero tickets are
+expected because the queued fake selects only the Phase 1 tools. The dependency-down
+probe was not rerun in Phase 2; the recorded Phase 1 probe remains valid evidence.
+See `PROGRESS.md` for exact command output and the complete runtime record.
 
-## API implemented in Phase 1
+## API implemented through Phase 2
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -133,22 +161,22 @@ live API/worker smoke result, dependency-failure probe, and final repository aud
 | `GET` | `/api/v1/suites` | List loaded suite versions and case counts |
 | `POST` | `/api/v1/experiments` | Persist and enqueue one fake-provider experiment; return `202` |
 | `GET` | `/api/v1/experiments/{experiment_id}` | Retrieve experiment lifecycle and executions |
-| `GET` | `/api/v1/executions/{execution_id}` | Retrieve final state, trace, tool calls, and grader evidence |
+| `GET` | `/api/v1/executions/{execution_id}` | Retrieve final state (including address/tickets), trace, tool calls, and grader evidence |
 
 A compatible replay of an `Idempotency-Key` returns the existing experiment ID. If
 the original dispatch reached `enqueue_failed`, replay moves the same execution
-back to queued and dispatches it again. A stable unique RQ job ID, completed-job
-replay guard, and PostgreSQL refund/tool uniqueness keep that Phase 1 effect from
-being duplicated.
+back to queued and dispatches it again. Concurrent same-key requests are serialized
+on a dedicated PostgreSQL connection through the enqueue outcome. A stable unique
+RQ job ID, completed-job replay guard, exact tool-call intent checks, row locks,
+semantic convergence, and PostgreSQL uniqueness prevent duplicate effects.
 
 ## Planned, not implemented
 
-Phase 2 adds `update_shipping_address`, `escalate_ticket`, support-ticket state,
-and stronger isolation/idempotency hardening. Later phases expand to the target 25
-original scenarios, add policy/authorization/escalation and recovery graders,
-exercise retries and duplicate delivery, compare experiments, and add a small
-server-rendered report. A real-provider adapter is optional Phase 6 work and
-requires explicit approval for credentials and possible spending.
+Phase 3 expands to the target 25 original scenarios and adds deterministic
+policy/authorization/escalation graders plus intentionally defective fake behavior.
+Later phases exercise retries and duplicate delivery, compare experiments, and add
+a small server-rendered report. A real-provider adapter is optional Phase 6 work
+and requires explicit approval for credentials and possible spending.
 
 There is currently no real model, UI, report, summary/retry API, multi-trial run,
 token/cost accounting, or claim of model performance.

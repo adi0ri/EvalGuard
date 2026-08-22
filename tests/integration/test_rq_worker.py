@@ -17,6 +17,7 @@ from evalguard.db.models import (
     GraderResult,
     Order,
     Refund,
+    SupportTicket,
     ToolInvocation,
     TraceEvent,
 )
@@ -63,7 +64,14 @@ def test_simple_worker_persists_state_trace_and_grades(
             ("CUST-1001", "maya.chen@example.test")
         ]
         assert [(order.external_id, order.total_cents) for order in orders] == [("PD-1001", 4599)]
+        assert orders[0].shipping_address_line1 is None
         assert [(refund.amount_cents, refund.status) for refund in refunds] == [(4599, "completed")]
+        assert (
+            session.scalars(
+                select(SupportTicket).where(SupportTicket.case_execution_id == execution_id)
+            ).all()
+            == []
+        )
 
         invocations = session.scalars(
             select(ToolInvocation)

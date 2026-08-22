@@ -1,16 +1,26 @@
-"""API persistence and live dependency readiness integration coverage."""
+"""API persistence, idempotency, and live dependency integration coverage."""
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event, Lock
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from redis import Redis
 from rq import Queue
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, sessionmaker
 
 import evalguard.api.routes as experiment_routes
+from evalguard.api.app import create_app
 from evalguard.db.models import CaseExecution, Experiment
+from evalguard.domain.tool_schemas import (
+    EscalateTicketArgs,
+    ShippingAddress,
+    UpdateShippingAddressArgs,
+)
+from evalguard.domain.tools import ToolRuntime
 
 pytestmark = pytest.mark.integration
 
@@ -121,3 +131,155 @@ def test_idempotent_retry_requeues_an_enqueue_failure(
     assert UUID(replay.json()["id"]) == original_id
     assert retry.json()["execution_ids"] == replay.json()["execution_ids"]
     assert rq_queue.job_ids == [f"case-execution-{retry.json()['execution_ids'][0]}"]
+
+
+def test_concurrent_idempotency_key_submissions_create_one_experiment(
+    seeded_suite: object,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del seeded_suite
+    start = Barrier(2)
+    enqueue_attempts: list[UUID] = []
+    enqueue_attempts_lock = Lock()
+
+    def record_enqueue(execution_id: UUID) -> None:
+        with enqueue_attempts_lock:
+            enqueue_attempts.append(execution_id)
+
+    monkeypatch.setattr(experiment_routes, "enqueue_execution", record_enqueue)
+
+    def submit() -> tuple[int, dict[str, object]]:
+        start.wait(timeout=5)
+        with TestClient(create_app()) as concurrent_client:
+            response = concurrent_client.post(
+                "/api/v1/experiments",
+                json={"provider": "deterministic-fake", "trials": 1},
+                headers={"Idempotency-Key": "concurrent-phase2-submission"},
+            )
+            return response.status_code, response.json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: submit(), range(2)))
+
+    assert [status_code for status_code, _ in responses] == [202, 202]
+    assert len({str(payload["id"]) for _, payload in responses}) == 1
+    assert len({str(payload["execution_ids"]) for _, payload in responses}) == 1
+    assert len(enqueue_attempts) == 1
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(Experiment)) == 1
+        assert session.scalar(select(func.count()).select_from(CaseExecution)) == 1
+
+
+def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
+    seeded_suite: object,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del seeded_suite
+    start = Barrier(2)
+    first_dispatch_started = Event()
+    release_first_dispatch = Event()
+    enqueue_attempts: list[UUID] = []
+    enqueue_attempts_lock = Lock()
+
+    def controlled_enqueue(execution_id: UUID) -> None:
+        with enqueue_attempts_lock:
+            enqueue_attempts.append(execution_id)
+            attempt_number = len(enqueue_attempts)
+        if attempt_number == 1:
+            first_dispatch_started.set()
+            if not release_first_dispatch.wait(timeout=5):
+                raise TimeoutError("Test did not release the first dispatch attempt")
+            raise OSError("synthetic concurrent dispatch failure")
+
+    monkeypatch.setattr(experiment_routes, "enqueue_execution", controlled_enqueue)
+
+    def submit() -> tuple[int, dict[str, object]]:
+        start.wait(timeout=5)
+        with TestClient(create_app()) as concurrent_client:
+            response = concurrent_client.post(
+                "/api/v1/experiments",
+                json={"provider": "deterministic-fake", "trials": 1},
+                headers={"Idempotency-Key": "concurrent-dispatch-retry-phase2"},
+            )
+            return response.status_code, response.json()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(submit) for _ in range(2)]
+        try:
+            assert first_dispatch_started.wait(timeout=5)
+            assert all(not future.done() for future in futures)
+        finally:
+            release_first_dispatch.set()
+        responses = [future.result(timeout=10) for future in futures]
+
+    assert sorted(status_code for status_code, _ in responses) == [202, 503]
+    assert len(enqueue_attempts) == 2
+    assert enqueue_attempts[0] == enqueue_attempts[1]
+    with session_factory() as session:
+        experiment = session.scalar(
+            select(Experiment).where(
+                Experiment.idempotency_key == "concurrent-dispatch-retry-phase2"
+            )
+        )
+        assert experiment is not None
+        assert experiment.status == "queued"
+        assert session.scalar(select(func.count()).select_from(Experiment)) == 1
+        executions = session.scalars(
+            select(CaseExecution).where(CaseExecution.experiment_id == experiment.id)
+        ).all()
+        assert len(executions) == 1
+        assert executions[0].status == "queued"
+
+
+def test_execution_retrieval_includes_shipping_address_and_escalation(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    execution_factory: Callable[..., UUID],
+) -> None:
+    execution_id = execution_factory(order_status="processing")
+    address = ShippingAddress(
+        line1="14 Cedar Lane",
+        line2="Suite 2",
+        city="Port Aurora",
+        region="CA",
+        postal_code="94107",
+        country="US",
+    )
+    with session_factory.begin() as session:
+        runtime = ToolRuntime(session, execution_id)
+        runtime.update_shipping_address(
+            UpdateShippingAddressArgs(order_id="PD-1001", address=address),
+            tool_call_id="api-address-update-1",
+        )
+        ticket = runtime.escalate_ticket(
+            EscalateTicketArgs(
+                order_id="PD-1001",
+                reason_code="manual_review",
+                reason="Synthetic API retrieval evidence.",
+                priority="normal",
+            ),
+            tool_call_id="api-escalation-1",
+        )
+
+    response = client.get(f"/api/v1/executions/{execution_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["orders"][0]["shipping_address"] == address.model_dump(mode="json")
+    assert payload["support_tickets"] == [
+        {
+            "id": ticket.ticket_id,
+            "case_execution_id": str(execution_id),
+            "customer_id": payload["orders"][0]["customer_id"],
+            "order_id": payload["support_tickets"][0]["order_id"],
+            "reason_code": "manual_review",
+            "reason": "Synthetic API retrieval evidence.",
+            "priority": "normal",
+            "status": "escalated",
+            "tool_call_id": "api-escalation-1",
+            "created_at": payload["support_tickets"][0]["created_at"],
+            "escalated_at": payload["support_tickets"][0]["escalated_at"],
+        }
+    ]

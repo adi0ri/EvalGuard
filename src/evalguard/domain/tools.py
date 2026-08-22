@@ -1,19 +1,36 @@
 """Execution-scoped ParcelDesk tools with persisted call and trace records."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 from uuid import UUID
 
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from evalguard.db.models import Customer, Order, Refund, ToolInvocation, TraceEvent
+from evalguard.db.models import (
+    CaseExecution,
+    Customer,
+    Order,
+    Refund,
+    SupportTicket,
+    ToolInvocation,
+    TraceEvent,
+)
 from evalguard.domain.tool_schemas import (
+    EscalateTicketArgs,
+    EscalateTicketResult,
     IssueRefundArgs,
     IssueRefundResult,
     LookupOrderArgs,
     LookupOrderResult,
+    UpdateShippingAddressArgs,
+    UpdateShippingAddressResult,
 )
+
+ADDRESS_CHANGEABLE_ORDER_STATUSES = frozenset({"pending", "processing"})
+HIGH_VALUE_REFUND_THRESHOLD_CENTS = 50_000
+ToolResultT = TypeVar("ToolResultT", bound=BaseModel)
 
 
 class ToolExecutionError(RuntimeError):
@@ -62,18 +79,78 @@ class ToolRuntime:
             )
         )
 
-    def lookup_order(self, arguments: LookupOrderArgs, *, tool_call_id: str) -> LookupOrderResult:
-        cached = self._cached_invocation(tool_call_id)
-        if cached is not None:
-            if cached.status != "completed" or cached.result is None:
-                raise ToolExecutionError(f"Tool call {tool_call_id} is not replayable")
-            return LookupOrderResult.model_validate(cached.result)
+    def _lock_execution(self) -> None:
+        """Serialize calls that can share an execution-local identity or trace."""
 
+        execution = self.session.scalar(
+            select(CaseExecution)
+            .where(CaseExecution.id == self.case_execution_id)
+            .with_for_update()
+        )
+        if execution is None:
+            raise ToolExecutionError(f"Execution {self.case_execution_id} was not found")
+
+    def _locked_order(self, order_id: str) -> Order:
+        """Lock one execution-owned order before evaluating or changing its state."""
+
+        order = self.session.scalar(
+            select(Order)
+            .where(
+                Order.case_execution_id == self.case_execution_id,
+                Order.external_id == order_id,
+            )
+            .with_for_update()
+        )
+        if order is None:
+            raise ToolExecutionError(f"Order {order_id} was not found in this execution")
+        return order
+
+    def _replay_cached(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        arguments: BaseModel,
+        result_type: type[ToolResultT],
+    ) -> ToolResultT | None:
+        """Replay only when a stable call ID represents exactly the same intent."""
+
+        cached = self._cached_invocation(tool_call_id)
+        if cached is None:
+            return None
+
+        validated_arguments = arguments.model_dump(mode="json")
+        if cached.tool_name != tool_name or cached.arguments != validated_arguments:
+            raise ToolExecutionError(
+                f"Tool call {tool_call_id} was already used for different tool or arguments"
+            )
+        if cached.status == "failed":
+            persisted_error = None
+            if cached.result is not None:
+                persisted_error = cached.result.get("error")
+            if isinstance(persisted_error, str):
+                raise ToolExecutionError(persisted_error)
+            raise ToolExecutionError(f"Tool call {tool_call_id} previously failed")
+        if cached.status != "completed" or cached.result is None:
+            raise ToolExecutionError(f"Tool call {tool_call_id} is not replayable")
+        try:
+            return result_type.model_validate(cached.result)
+        except ValidationError as exc:
+            raise ToolExecutionError(
+                f"Tool call {tool_call_id} has an invalid persisted result"
+            ) from exc
+
+    def _start_invocation(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        arguments: BaseModel,
+    ) -> ToolInvocation:
+        arguments_payload = arguments.model_dump(mode="json")
         invocation = ToolInvocation(
             case_execution_id=self.case_execution_id,
             tool_call_id=tool_call_id,
-            tool_name="lookup_order",
-            arguments=arguments.model_dump(mode="json"),
+            tool_name=tool_name,
+            arguments=arguments_payload,
             status="running",
         )
         self.session.add(invocation)
@@ -81,86 +158,127 @@ class ToolRuntime:
             "tool_call",
             {
                 "tool_call_id": tool_call_id,
-                "tool_name": "lookup_order",
-                "arguments": arguments.model_dump(mode="json"),
+                "tool_name": tool_name,
+                "arguments": arguments_payload,
             },
         )
+        return invocation
 
-        order = self.session.scalar(
-            select(Order).where(
-                Order.case_execution_id == self.case_execution_id,
-                Order.external_id == arguments.order_id,
-            )
-        )
-        if order is None:
-            raise ToolExecutionError(f"Order {arguments.order_id} was not found in this execution")
-        customer = self.session.scalar(
-            select(Customer).where(
-                Customer.id == order.customer_id,
-                Customer.case_execution_id == self.case_execution_id,
-            )
-        )
-        if customer is None:
-            raise ToolExecutionError("The order's customer is outside this execution")
-
-        result = LookupOrderResult(
-            order_id=order.external_id,
-            customer_id=customer.external_id,
-            status=order.status,
-            total_cents=order.total_cents,
-            currency=order.currency,
-        )
-        invocation.result = result.model_dump(mode="json")
+    def _complete_invocation(
+        self,
+        invocation: ToolInvocation,
+        result: BaseModel,
+    ) -> None:
+        result_payload = result.model_dump(mode="json")
+        invocation.result = result_payload
         invocation.status = "completed"
         invocation.completed_at = datetime.now(UTC)
         self.trace(
             "tool_result",
             {
-                "tool_call_id": tool_call_id,
-                "tool_name": "lookup_order",
-                "result": result.model_dump(mode="json"),
+                "tool_call_id": invocation.tool_call_id,
+                "tool_name": invocation.tool_name,
+                "result": result_payload,
             },
         )
+
+    def _fail_invocation(
+        self,
+        invocation: ToolInvocation,
+        error: ToolExecutionError,
+    ) -> None:
+        """Persist an expected domain rejection as ordered execution evidence."""
+
+        error_payload = {
+            "error": str(error),
+            "error_type": type(error).__name__,
+        }
+        invocation.result = error_payload
+        invocation.status = "failed"
+        invocation.completed_at = datetime.now(UTC)
+        self.trace(
+            "tool_error",
+            {
+                "tool_call_id": invocation.tool_call_id,
+                "tool_name": invocation.tool_name,
+                "error": error_payload,
+            },
+        )
+
+    def lookup_order(self, arguments: LookupOrderArgs, *, tool_call_id: str) -> LookupOrderResult:
+        self._lock_execution()
+        cached = self._replay_cached(
+            tool_call_id,
+            "lookup_order",
+            arguments,
+            LookupOrderResult,
+        )
+        if cached is not None:
+            return cached
+
+        invocation = self._start_invocation(tool_call_id, "lookup_order", arguments)
+        try:
+            order = self.session.scalar(
+                select(Order).where(
+                    Order.case_execution_id == self.case_execution_id,
+                    Order.external_id == arguments.order_id,
+                )
+            )
+            if order is None:
+                raise ToolExecutionError(
+                    f"Order {arguments.order_id} was not found in this execution"
+                )
+            customer = self.session.scalar(
+                select(Customer).where(
+                    Customer.id == order.customer_id,
+                    Customer.case_execution_id == self.case_execution_id,
+                )
+            )
+            if customer is None:
+                raise ToolExecutionError("The order's customer is outside this execution")
+
+            result = LookupOrderResult(
+                order_id=order.external_id,
+                customer_id=customer.external_id,
+                status=order.status,
+                total_cents=order.total_cents,
+                currency=order.currency,
+            )
+        except ToolExecutionError as exc:
+            self._fail_invocation(invocation, exc)
+            raise
+        self._complete_invocation(invocation, result)
         return result
 
     def issue_refund(self, arguments: IssueRefundArgs, *, tool_call_id: str) -> IssueRefundResult:
-        cached = self._cached_invocation(tool_call_id)
+        self._lock_execution()
+        cached = self._replay_cached(
+            tool_call_id,
+            "issue_refund",
+            arguments,
+            IssueRefundResult,
+        )
         if cached is not None:
-            if cached.status != "completed" or cached.result is None:
-                raise ToolExecutionError(f"Tool call {tool_call_id} is not replayable")
-            return IssueRefundResult.model_validate(cached.result)
+            return cached
 
-        order = self.session.scalar(
-            select(Order).where(
-                Order.case_execution_id == self.case_execution_id,
-                Order.external_id == arguments.order_id,
-            )
-        )
-        if order is None:
-            raise ToolExecutionError(f"Order {arguments.order_id} was not found in this execution")
-        if order.status != "delivered":
-            raise ToolExecutionError("Only the implemented delivered-order scenario is refundable")
-        if arguments.amount_cents != order.total_cents:
-            raise ToolExecutionError(
-                "The refund amount must equal the order total in this scenario"
-            )
-
-        invocation = ToolInvocation(
-            case_execution_id=self.case_execution_id,
-            tool_call_id=tool_call_id,
-            tool_name="issue_refund",
-            arguments=arguments.model_dump(mode="json"),
-            status="running",
-        )
-        self.session.add(invocation)
-        self.trace(
-            "tool_call",
-            {
-                "tool_call_id": tool_call_id,
-                "tool_name": "issue_refund",
-                "arguments": arguments.model_dump(mode="json"),
-            },
-        )
+        invocation = self._start_invocation(tool_call_id, "issue_refund", arguments)
+        try:
+            order = self._locked_order(arguments.order_id)
+            if order.status != "delivered":
+                raise ToolExecutionError(
+                    "Only the implemented delivered-order scenario is refundable"
+                )
+            if arguments.amount_cents != order.total_cents:
+                raise ToolExecutionError(
+                    "The refund amount must equal the order total in this scenario"
+                )
+            if order.total_cents >= HIGH_VALUE_REFUND_THRESHOLD_CENTS:
+                raise ToolExecutionError(
+                    "Refunds at or above 50000 cents require ticket escalation"
+                )
+        except ToolExecutionError as exc:
+            self._fail_invocation(invocation, exc)
+            raise
 
         existing_refund = self.session.scalar(
             select(Refund).where(
@@ -192,15 +310,134 @@ class ToolRuntime:
             status="completed",
             duplicate=duplicate,
         )
-        invocation.result = result.model_dump(mode="json")
-        invocation.status = "completed"
-        invocation.completed_at = datetime.now(UTC)
-        self.trace(
-            "tool_result",
-            {
-                "tool_call_id": tool_call_id,
-                "tool_name": "issue_refund",
-                "result": result.model_dump(mode="json"),
-            },
+        self._complete_invocation(invocation, result)
+        return result
+
+    def update_shipping_address(
+        self,
+        arguments: UpdateShippingAddressArgs,
+        *,
+        tool_call_id: str,
+    ) -> UpdateShippingAddressResult:
+        """Update an unshipped order, converging repeated semantic requests."""
+
+        self._lock_execution()
+        cached = self._replay_cached(
+            tool_call_id,
+            "update_shipping_address",
+            arguments,
+            UpdateShippingAddressResult,
         )
+        if cached is not None:
+            return cached
+
+        invocation = self._start_invocation(
+            tool_call_id,
+            "update_shipping_address",
+            arguments,
+        )
+        try:
+            order = self._locked_order(arguments.order_id)
+            if order.status not in ADDRESS_CHANGEABLE_ORDER_STATUSES:
+                raise ToolExecutionError(
+                    "Shipping addresses can only be changed for pending or processing orders"
+                )
+
+            requested = arguments.address
+            existing_values = (
+                order.shipping_address_line1,
+                order.shipping_address_line2,
+                order.shipping_city,
+                order.shipping_region,
+                order.shipping_postal_code,
+                order.shipping_country,
+            )
+            requested_values = (
+                requested.line1,
+                requested.line2,
+                requested.city,
+                requested.region,
+                requested.postal_code,
+                requested.country,
+            )
+            duplicate = existing_values == requested_values
+        except ToolExecutionError as exc:
+            self._fail_invocation(invocation, exc)
+            raise
+        if not duplicate:
+            order.shipping_address_line1 = requested.line1
+            order.shipping_address_line2 = requested.line2
+            order.shipping_city = requested.city
+            order.shipping_region = requested.region
+            order.shipping_postal_code = requested.postal_code
+            order.shipping_country = requested.country
+
+        result = UpdateShippingAddressResult(
+            order_id=order.external_id,
+            address=requested,
+            status="updated",
+            duplicate=duplicate,
+        )
+        self._complete_invocation(invocation, result)
+        return result
+
+    def escalate_ticket(
+        self,
+        arguments: EscalateTicketArgs,
+        *,
+        tool_call_id: str,
+    ) -> EscalateTicketResult:
+        """Create one durable escalation per execution, order, and reason code."""
+
+        self._lock_execution()
+        cached = self._replay_cached(
+            tool_call_id,
+            "escalate_ticket",
+            arguments,
+            EscalateTicketResult,
+        )
+        if cached is not None:
+            return cached
+
+        invocation = self._start_invocation(tool_call_id, "escalate_ticket", arguments)
+        try:
+            order = self._locked_order(arguments.order_id)
+        except ToolExecutionError as exc:
+            self._fail_invocation(invocation, exc)
+            raise
+        ticket = self.session.scalar(
+            select(SupportTicket).where(
+                SupportTicket.case_execution_id == self.case_execution_id,
+                SupportTicket.order_id == order.id,
+                SupportTicket.reason_code == arguments.reason_code,
+            )
+        )
+        duplicate = ticket is not None
+        if ticket is None:
+            ticket = SupportTicket(
+                case_execution_id=self.case_execution_id,
+                customer_id=order.customer_id,
+                order_id=order.id,
+                reason_code=arguments.reason_code,
+                reason=arguments.reason,
+                priority=arguments.priority,
+                status="escalated",
+                tool_call_id=tool_call_id,
+                escalated_at=datetime.now(UTC),
+            )
+            self.session.add(ticket)
+            self.session.flush()
+
+        result = EscalateTicketResult.model_validate(
+            {
+                "ticket_id": str(ticket.id),
+                "order_id": order.external_id,
+                "reason_code": ticket.reason_code,
+                "reason": ticket.reason,
+                "priority": ticket.priority,
+                "status": "escalated",
+                "duplicate": duplicate,
+            }
+        )
+        self._complete_invocation(invocation, result)
         return result

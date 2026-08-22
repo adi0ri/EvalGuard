@@ -266,6 +266,12 @@ class Order(Base):
     total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False)
+    shipping_address_line1: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    shipping_address_line2: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    shipping_city: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    shipping_region: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    shipping_postal_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    shipping_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
     placed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -310,3 +316,57 @@ class Refund(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
+
+
+class SupportTicket(Base):
+    __tablename__ = "support_tickets"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["customer_id", "case_execution_id"],
+            ["customers.id", "customers.case_execution_id"],
+            name="fk_support_tickets_customer_execution",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["order_id", "case_execution_id"],
+            ["orders.id", "orders.case_execution_id"],
+            name="fk_support_tickets_order_execution",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["case_execution_id", "tool_call_id"],
+            ["tool_invocations.case_execution_id", "tool_invocations.tool_call_id"],
+            name="fk_support_tickets_tool_invocation",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "case_execution_id",
+            "order_id",
+            "reason_code",
+            name="uq_support_tickets_execution_order_reason",
+        ),
+        UniqueConstraint(
+            "case_execution_id",
+            "tool_call_id",
+            name="uq_support_tickets_execution_tool_call",
+        ),
+        Index("ix_support_tickets_execution_status", "case_execution_id", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    case_execution_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("case_executions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    customer_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    order_id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    priority: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    tool_call_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

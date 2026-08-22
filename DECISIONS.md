@@ -214,3 +214,91 @@ pytest refuses destructive cleanup unless test mode, the `_test` suffix, a
 non-development Redis database, and the `evalguard-tests` queue are in use. The
 tested default is Redis database 15. Compose exposes preparation as a one-shot
 `test-db` service, so repeated local runs work on both fresh and reused volumes.
+
+## 2026-08-22 — D013: Keep Phase 2 support state relational and execution-owned
+
+**Status:** Accepted for Phase 2.
+
+**Reason:** A shipping address is business state on one synthetic order, and an
+escalation is a durable support record that graders and retrieval APIs must be able
+to inspect. Both need the same execution-isolation guarantees as customers, orders,
+and refunds. Storing them only in a trace or fixture JSON document would hide
+ownership relationships and make cross-execution leakage harder for PostgreSQL to
+reject.
+
+**Alternatives:** A generic JSON ticket payload would be quick to add but would
+weaken foreign keys, indexing, and deterministic queries. A separate ticket service
+or repository layer would add a boundary without a Phase 2 need. A global support
+ticket keyed only by order ID would allow parallel case executions to contaminate
+one another.
+
+**Consequences:** Address fields are nullable relational columns on the
+execution-owned order. `support_tickets` has direct execution ownership plus
+composite foreign keys to the execution-owned customer, order, and originating
+tool invocation. PostgreSQL enforces one escalation per execution/order/reason
+code and one ticket per execution/tool-call identity. Runtime predicates repeat
+the execution boundary, API retrieval returns the relational rows, and tests prove
+both application-level denial and database-level rejection of cross-execution
+ownership. Published evaluation-suite tables and their immutability triggers are
+unchanged.
+
+## 2026-08-22 — D014: Serialize state-changing tools and distinguish exact replay from semantic duplication
+
+**Status:** Accepted for the implemented Phase 2 tools; this completes the Phase 2
+portion of D008 without claiming later worker-recovery work.
+
+**Reason:** Queue delivery, provider retries, and concurrent calls can repeat an
+operation. A stable call ID is safe to replay only when it names the same tool and
+the same validated arguments. Separate call IDs may still express the same
+business intent, so the mutation also needs a semantic idempotency rule. Expected
+policy rejection is part of evaluation evidence and must be persisted rather than
+existing only as an exception or application log.
+
+**Alternatives:** Trusting exactly-once delivery would leave races unhandled.
+Checking for existing state without a lock would permit two writers to pass the
+same precondition. Replaying any request that reuses a call ID could silently return
+a result for different arguments or even a different tool. Recording only
+successful invocations would make policy failures invisible to deterministic
+graders.
+
+**Consequences:** Each tool call locks its case-execution row before inspecting a
+stable call ID, and state-changing calls lock the execution-owned order. An exact
+same-tool/same-arguments replay returns the persisted result without a second
+invocation or trace pair; conflicting reuse raises an error. A repeated requested
+address is a successful no-op, and escalation converges on one ticket per
+execution/order/reason code even when call IDs differ. Address changes are allowed
+only for `pending` or `processing` orders. Refunds at or above 50,000 cents create
+no refund and require escalation. Expected rejection leaves a failed
+`ToolInvocation` plus `tool_error`; replay raises the persisted error. Business
+state and invocation/trace evidence share the caller's transaction, so a rollback
+removes them together. PostgreSQL uniqueness and composite ownership constraints
+remain the final backstop, and concurrent/rollback tests exercise these boundaries.
+
+## 2026-08-22 — D015: Serialize experiment idempotency keys across persistence and dispatch outcome
+
+**Status:** Accepted for Phase 2.
+
+**Reason:** A unique database constraint prevents two experiments from committing
+with the same idempotency key, but it does not by itself give two simultaneous HTTP
+requests a coherent enqueue outcome. A retry must not inspect an intermediate
+record and race the first request's Redis dispatch or `enqueue_failed` persistence.
+PostgreSQL session-level advisory locks require lock and unlock to use the same
+physical connection, including across intermediate commits.
+
+**Alternatives:** Catching a unique-constraint error and immediately rereading the
+row can observe a dispatch outcome that has not happened yet. A process-local mutex
+would fail across multiple API processes. Holding an ordinary database transaction
+open across Redis enqueue would make the durable experiment invisible to the
+worker and would couple a network call to an open write transaction. An outbox is a
+stronger recovery design but exceeds the Phase 2 milestone.
+
+**Consequences:** The API derives a signed 64-bit PostgreSQL advisory-lock key from
+a SHA-256 namespaced hash of the opaque `Idempotency-Key`. One dedicated
+connection-bound SQLAlchemy session holds that key lock across durable lookup or
+creation, the commit that makes work visible, Redis dispatch, persistence of the
+dispatch outcome, and explicit unlock. Different keys remain independent. Tests
+prove two concurrent successful submissions produce one experiment, one execution,
+and one enqueue, and that a concurrent retry waits for a first dispatch failure
+before safely reusing and enqueueing the same durable execution. PostgreSQL and
+Redis remain separate systems; automated outbox-style recovery is still later
+resilience work.

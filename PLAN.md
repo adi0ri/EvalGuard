@@ -1,12 +1,13 @@
 # EvalGuard Delivery Plan
 
-Last updated: 2026-08-18
+Last updated: 2026-08-22
 
 ## Current milestone
 
-**Phase 0 and Phase 1 — complete.** Implementation, local runtime verification,
-final audit, and the verified local milestone commit are complete. Phase 2 and
-later are backlog only.
+**Phase 0, Phase 1, and Phase 2 — complete.** The four typed domain tools,
+relational Phase 2 state, correctness hardening, PostgreSQL coverage, clean
+migration round trip, Compose startup, and live deterministic smoke are verified.
+Phase 3 and later remain backlog only.
 
 ## Phase 0 — repository and architecture foundation
 
@@ -98,7 +99,59 @@ later are backlog only.
 - [x] Test liveness and readiness behavior.
 - [x] Exercise a live Docker startup and queued-evaluation smoke test.
 
-## Phase 0/1 acceptance gate
+## Phase 2 — complete domain tools and strengthen correctness
+
+### Domain and persistence
+
+- [x] Add validated typed arguments and results with closed object schemas for
+  `update_shipping_address` and `escalate_ticket`.
+- [x] Add relational order shipping-address fields and execution-scoped
+  `support_tickets` through Alembic revision `20260822_0005`.
+- [x] Protect ticket ownership with composite execution/customer, execution/order,
+  and execution/tool-call foreign keys.
+- [x] Preserve published-suite immutability and per-execution business-state
+  isolation.
+
+### Policy, transactions, and idempotency
+
+- [x] Permit shipping-address changes only for `pending` and `processing` orders;
+  reject later fulfillment states without mutation.
+- [x] Require `high_value_refund` escalation instead of issuing refunds at or above
+  50,000 cents.
+- [x] Lock the execution row before tool-call identity/trace decisions and the order
+  row before state-changing policy decisions.
+- [x] Replay a stable call ID only when the tool name and validated arguments match
+  exactly; reject conflicting reuse.
+- [x] Make a new call ID for an already-applied address or escalation converge on
+  the existing semantic state without a second mutation.
+- [x] Persist failed invocations and ordered `tool_error` trace evidence for
+  policy/ownership rejections reached after invocation start when the surrounding
+  transaction is retained.
+- [x] Serialize concurrent API submissions for one `Idempotency-Key` on a dedicated
+  PostgreSQL connection/session through persistence, enqueue attempt, and dispatch
+  outcome.
+
+### Retrieval and required Phase 2 tests
+
+- [x] Expose structured shipping addresses and support tickets through execution
+  retrieval.
+- [x] Test successful and rejected address changes against PostgreSQL.
+- [x] Test required high-value escalation and duplicate escalation convergence.
+- [x] Test stable-call replay, conflicting call intent, semantic duplicates, and
+  concurrent state-changing calls.
+- [x] Prove address and escalation tools cannot cross execution boundaries, and
+  prove composite ticket ownership constraints reject cross-execution rows.
+- [x] Test concurrent same-key API submission, retrieval, RQ worker compatibility,
+  and the complete deterministic fake-provider path.
+- [x] Continue using only the deterministic fake provider; no paid or real API was
+  called.
+
+The queued RQ fake remains the single published `eligible-refund` case and selects
+only `lookup_order` followed by `issue_refund`. Phase 2 tool behavior is verified
+through PostgreSQL and API integration coverage; Phase 3 owns the new immutable
+cases and deterministic graders that exercise those tools in queued evaluations.
+
+## Phase 0/1/2 acceptance gate
 
 - [x] `docker compose up --build` starts API, worker, PostgreSQL, and Redis.
 - [x] Alembic upgrades a clean PostgreSQL database.
@@ -117,14 +170,26 @@ later are backlog only.
 - [x] Every README setup/check command has been exercised locally.
 - [x] A final provenance and secret scan finds no proprietary material or secrets.
 - [x] Durable documents match the verified implementation and evidence.
+- [x] The locked install checked 49 packages in 4 ms; Ruff lint passed; Ruff format
+  checked 52 files; mypy checked 27 source files; and pytest passed 49 tests with
+  one dependency-originated warning in 15.85 seconds.
+- [x] A disposable clean PostgreSQL database upgraded through revisions
+  `20260818_0001` to `20260822_0005`, downgraded from `0005` to `0004`, re-upgraded
+  to head, and reported no model/migration drift.
+- [x] `docker compose up --build -d --wait` exited successfully; API, PostgreSQL,
+  and Redis were healthy, the worker was running, and one-shot `migrate` and
+  `test-db` services exited successfully.
+- [x] Seeding twice returned the same suite ID, case ID, and definition hash.
+- [x] The Phase 2 live smoke returned liveness `200`, readiness `200`, experiment
+  submission `202`, and a completed fake-provider execution with one customer, one
+  order, one refund, a null shipping address, zero tickets, two baseline tool
+  invocations, seven trace events, and four passing grader criteria.
+- [x] The Phase 2 migration and PostgreSQL tests cover accepted/rejected address
+  changes, required escalation, duplicate calls, concurrency, and isolation.
+- [x] Dependency-unavailable readiness was not rerun for Phase 2; the verified
+  Phase 1 liveness-`200`/readiness-`503` probe remains the current evidence.
 
 ## Backlog — do not implement during the current milestone
-
-### Phase 2: complete domain tools and strengthen correctness
-
-- [ ] Add `update_shipping_address` and `escalate_ticket`.
-- [ ] Strengthen transaction boundaries, state isolation, and idempotency.
-- [ ] Add support-ticket and escalation state.
 
 ### Phase 3: complete scenario and grader coverage
 
@@ -158,21 +223,23 @@ later are backlog only.
 | --- | --- |
 | Docker or service tooling is unavailable locally | Detect early, record exact failure, and do not infer runtime success from static configuration. |
 | Windows/PowerShell commands diverge from CI | Exercise documented local commands on Windows and keep CI commands equivalent in behavior. |
-| API persistence succeeds but queue dispatch fails | Model lifecycle states explicitly and surface the failure; later phases harden recovery. |
-| A worker repeats a state-changing call | Carry stable job/tool identities and enforce database uniqueness plus transactional checks. |
-| Parallel executions leak business state | Scope ownership through execution foreign keys and test cross-execution access denial. |
+| API persistence succeeds but queue dispatch fails | Model lifecycle states explicitly, hold same-key serialization through dispatch outcome, and surface `enqueue_failed`; Phase 4 hardens wider crash-window recovery. |
+| A worker repeats a state-changing call | Carry stable job/tool identities, require exact replay intent, lock decision rows, and enforce database uniqueness plus semantic convergence. |
+| Parallel executions leak business state | Scope ownership through execution foreign keys, including composite ticket ownership, and test cross-execution access denial. |
 | Publication races with a late case write | Serialize both paths on suite-row locks and test the concurrent insert boundary. |
 | Destructive test cleanup targets development state | Require test mode, a `*_test` PostgreSQL database, a non-development Redis database, and the test-only queue before cleanup; Redis DB 15 is the tested default. |
 | Fake-provider success is mistaken for model quality | Label results synthetic infrastructure validation throughout reports and provenance. |
 | Documentation drifts from behavior | Update durable documents with the implementing change and gate completion on exercised commands. |
 | A real-provider run introduces cost or secrets | Keep real providers in Phase 6 and require explicit user approval. |
 
-No Phase 0/1 implementation or local-runtime blocker is known. One upstream
+No Phase 0/1/2 implementation or local-runtime blocker is known. One upstream
 FastAPI/Starlette `TestClient` deprecation warning is recorded in `PROGRESS.md`;
-the full local and remote test suites still pass.
+the full local Phase 2 suite passes. Remote CI has not been rerun for the unpushed
+Phase 2 change.
 
 ## Precise next action
 
-The precise next unchecked phase is Phase 2: add `update_shipping_address`,
-`escalate_ticket`, support-ticket/escalation state, and the planned correctness
-hardening. Do not start it until the user explicitly advances the milestone.
+The precise next unchecked phase is Phase 3: add the remaining independently
+authored, immutable scenarios and deterministic policy, authorization, escalation,
+and defect-detection graders. Do not start it until the user explicitly advances
+the milestone.

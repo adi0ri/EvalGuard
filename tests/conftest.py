@@ -202,6 +202,8 @@ def execution_factory(
         order_external_id: str = "PD-1001",
         customer_external_id: str | None = None,
         total_cents: int = 4599,
+        order_status: str = "delivered",
+        shipping_address: dict[str, str | None] | None = None,
     ) -> UUID:
         nonlocal created
         created += 1
@@ -242,9 +244,15 @@ def execution_factory(
                         external_id=order_external_id,
                         total_cents=total_cents,
                         currency="USD",
-                        status="delivered",
+                        status=order_status,
                         placed_at=datetime(2026, 1, 10, 12, 0, tzinfo=UTC),
-                        delivered_at=now,
+                        delivered_at=now if order_status == "delivered" else None,
+                        shipping_address_line1=(shipping_address or {}).get("line1"),
+                        shipping_address_line2=(shipping_address or {}).get("line2"),
+                        shipping_city=(shipping_address or {}).get("city"),
+                        shipping_region=(shipping_address or {}).get("region"),
+                        shipping_postal_code=(shipping_address or {}).get("postal_code"),
+                        shipping_country=(shipping_address or {}).get("country"),
                     )
                 )
             execution_id = execution.id

@@ -78,9 +78,11 @@ def test_submit_worker_poll_and_retrieve_complete_refund(
     assert [(row["external_id"], row["total_cents"]) for row in execution["orders"]] == [
         ("PD-1001", 4599)
     ]
+    assert execution["orders"][0]["shipping_address"] is None
     assert [
         (row["amount_cents"], row["currency"], row["status"]) for row in execution["refunds"]
     ] == [(4599, "USD", "completed")]
+    assert execution["support_tickets"] == []
     assert [row["tool_name"] for row in execution["tool_invocations"]] == [
         "lookup_order",
         "issue_refund",

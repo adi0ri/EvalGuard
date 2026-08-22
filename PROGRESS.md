@@ -1,8 +1,8 @@
 # EvalGuard Progress Log
 
 This is a chronological evidence log. A command is recorded as passing only when
-it was actually run. All entries below are from 2026-08-18 on Windows/PowerShell
-unless otherwise noted.
+it was actually run. Phase 0/1 entries below are from 2026-08-18 on
+Windows/PowerShell; the Phase 2 continuation is explicitly dated 2026-08-22.
 
 ## Repository foundation
 
@@ -234,3 +234,163 @@ The precise next unchecked phase is Phase 2: complete the two remaining typed
 domain tools, add support-ticket/escalation state, and strengthen the planned
 correctness boundaries. Do not begin it until the user explicitly advances the
 milestone.
+
+## Phase 2 implementation — 2026-08-22
+
+The user explicitly advanced the repository to Phase 2. The implementation stayed
+within that milestone:
+
+- migration `20260822_0005` added relational shipping-address columns to each
+  execution-owned order and an execution-owned `support_tickets` table with
+  composite foreign keys and uniqueness constraints;
+- the typed `update_shipping_address` and `escalate_ticket` tools were added to
+  the production `ToolRuntime`;
+- address changes are allowed only while an order is `pending` or `processing`,
+  while refunds at or above 50,000 cents are rejected and require escalation;
+- execution and order row locks serialize state-changing tool calls, exact call-ID
+  replay requires the same tool and validated arguments, and semantic duplicate
+  address/escalation requests converge without an additional business mutation;
+- deterministic policy rejections now leave a failed `ToolInvocation` and an
+  ordered `tool_error` event, while transaction rollback removes business state
+  and its invocation/trace evidence together; and
+- execution retrieval now includes a structured shipping address and relational
+  support-ticket records. Published-suite triggers and stable hashes were left
+  unchanged, and their existing immutability tests remain in the passing suite.
+
+The deterministic queued provider intentionally still performs the immutable
+Phase 1 `lookup_order`/`issue_refund` case. The two new tools are exercised through
+the production runtime with PostgreSQL and API retrieval coverage. Adding queued
+address/escalation scenarios or their broader graders would be Phase 3 work and
+was not started.
+
+## Phase 2 audit findings and repairs — 2026-08-22
+
+- The audit required expected domain rejections to be durable evidence, not only
+  raised exceptions. Failed calls now persist the validated arguments, failure
+  message and type, completion time, and `tool_call`/`tool_error` sequence. Stable
+  replay of that exact failed call raises the persisted failure without adding a
+  second invocation.
+- Concurrency coverage was expanded to prove that two exact concurrent address
+  calls replay one invocation, two different call IDs with the same requested
+  address produce one mutation plus one semantic duplicate, and concurrent
+  escalations converge on one ticket. A forced-rollback test proves address,
+  ticket, invocation, and trace writes share the caller's transaction boundary.
+- The first submission-key serialization design did not guarantee that lock
+  acquisition, persistence commits, dispatch outcome, and unlock all used one
+  physical PostgreSQL connection. The final implementation uses a dedicated
+  connection-bound session and a key-derived advisory lock across that entire
+  sequence. Concurrent API tests prove one experiment/execution/enqueue for two
+  simultaneous successful submissions and prove a retry waits for the first
+  dispatch outcome before recovering the same durable experiment.
+- Cross-execution tool access is rejected in the runtime, and PostgreSQL composite
+  foreign keys independently reject a ticket that combines execution ownership
+  from different cases.
+
+## Phase 2 locked and automated verification — 2026-08-22
+
+The following final commands were run against the completed Phase 2 tree:
+
+| Command | Exact observed result |
+| --- | --- |
+| `uv sync --frozen --all-groups` | Succeeded: `Checked 49 packages in 4ms`. |
+| `uv run ruff check .` | Succeeded: `All checks passed!` |
+| `uv run ruff format --check .` | Succeeded: `52 files already formatted`. |
+| `uv run mypy` | Succeeded: no issues found in 27 source files. |
+| `uv run pytest` | Collected 49 tests; 49 passed with one warning in 15.85 seconds. |
+
+The only warning was the already-recorded dependency-originated
+`StarletteDeprecationWarning` from FastAPI's `TestClient` compatibility layer. It
+was not suppressed, and it did not fail a test.
+
+A final read-only integrity scan covered all 21 changed or new files and found no
+credential-like values. A separate scan of source, tests, and migrations found no
+obvious external or proprietary fixture markers.
+
+The 49-test PostgreSQL/Redis suite includes the original Phase 0/1 checks plus
+successful and rejected address changes, required high-value escalation, exact and
+semantic duplicate calls, conflicting call-ID reuse, concurrent calls, explicit
+transaction rollback, cross-execution access and foreign-key rejection, API
+retrieval of the new state, concurrent API submission idempotency, RQ worker
+regression coverage, and the complete queued end-to-end refund flow. SQLite was not
+substituted and no existing test was weakened.
+
+## Phase 2 clean migration round trip — 2026-08-22
+
+The complete five-revision chain was exercised only against the disposable empty
+database `evalguard_phase2_migration_check`. The observed sequence was:
+
+1. create the disposable database and point `EVALGUARD_DATABASE_URL` to it;
+2. run `uv run alembic upgrade head`, which applied `20260818_0001` through
+   `20260822_0005`;
+3. run `uv run alembic current`, which reported `20260822_0005 (head)`, and
+   `uv run alembic check`, which reported `No new upgrade operations detected.`;
+4. run `uv run alembic downgrade 20260818_0004`, which removed only the Phase 2
+   schema and reported `20260818_0004` as current;
+5. run `uv run alembic upgrade head` again, returning to
+   `20260822_0005 (head)` with no model/migration drift; and
+6. remove the environment override and drop the disposable database.
+
+Neither `evalguard` nor `evalguard_test` was used as a destructive migration-test
+target. After cleanup, only those normal development and test databases remained.
+
+## Phase 2 Compose and live smoke — 2026-08-22
+
+| Command | Exact observed result |
+| --- | --- |
+| `docker compose config --quiet` | Exited 0 with no configuration error. |
+| `docker compose up --build -d --wait` | Exited 0; API, PostgreSQL, and Redis were healthy, the worker was running, and one-shot `migrate` and `test-db` exited 0. |
+| `uv run alembic current` | Reported `20260822_0005 (head)`. |
+| `uv run alembic check` | Reported `No new upgrade operations detected.` |
+
+The documented loader was run twice with
+`docker compose exec -T api python -m evalguard.cli seed`. Both calls returned the
+same suite ID, case ID, and definition hash for
+`parceldesk-refunds@1.0.0` / `eligible-refund`, proving that the published suite's
+idempotent seed path remained intact.
+
+The final rebuilt live Compose API produced this exact smoke evidence:
+
+1. `GET /health/live` returned `200`.
+2. `GET /health/ready` returned `200` with PostgreSQL and Redis ready.
+3. `POST /api/v1/experiments` used idempotency key
+   `phase2-live-1787441765695` and returned `202` for experiment
+   `35278b3d-23ab-482b-bb9a-2798a1b895e6` and execution
+   `baee1588-b044-4c08-8a0b-e2a13729d93b`.
+4. Polling observed the execution reach `completed`.
+5. Retrieval returned one synthetic customer, one order, and one completed refund;
+   the unchanged baseline case correctly had a null shipping address and no support
+   tickets. It contained the two baseline tool invocations, seven ordered trace
+   events, and four of four passing deterministic grader results.
+
+After the final documented-tree image rebuild, liveness and readiness again
+returned `200`. Replaying the same key returned `202` with the same experiment and
+execution IDs, the experiment remained completed, and retrieval still showed one
+refund, zero tickets, seven trace events, and four passing grader results.
+
+This remains **synthetic infrastructure validation**, not real-model quality or
+performance evidence. No real or paid provider was called.
+
+An attempted Phase 2 dependency-down probe was blocked by the execution
+environment's command policy before it ran. No Compose service was stopped by that
+attempt, so no new unavailable-dependency result is claimed. The verified Phase 1
+Redis-unavailable liveness/readiness evidence earlier in this log remains the
+available dependency-failure proof.
+
+## Phase 2 known limits and precise next action — 2026-08-22
+
+- The one upstream `StarletteDeprecationWarning` remains.
+- The short deterministic worker still uses one transaction for its local fake
+  execution; unexpected worker failure still records a terminal summary after the
+  partial execution transaction rolls back. Shorter durable network-provider steps
+  and recovery remain later resilience work.
+- PostgreSQL persistence and Redis dispatch remain separate systems. Submission
+  serialization makes same-key outcomes deterministic, but automated outbox-style
+  recovery remains later work.
+- Phase 2 does not claim that the fake provider autonomously selects the two new
+  tools in a queued evaluation. Its live path remains the verified refund baseline.
+
+Phase 2 is locally verified. The precise next unchecked work, only after the user
+explicitly advances the milestone, is Phase 3: expand the immutable original suite
+to exactly 25 scenarios, add deterministic state/trace/policy/authorization/
+escalation graders, and add deliberately defective fake-agent behaviors that prove
+those graders detect regressions. No Phase 3 implementation was started here.
