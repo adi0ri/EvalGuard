@@ -113,6 +113,8 @@ collected 49 tests and passed all 49; the live Compose smoke completed the one
 existing immutable refund execution with its persisted state, two tool
 invocations, seven trace events, and four passing deterministic grader results.
 Those counts are repository/runtime evidence, not a model-quality benchmark.
+Local commit `e0f9715` records the verified Phase 2 implementation, migration,
+tests, and documentation; it was not pushed and has no Phase 2 remote-CI claim.
 
 The queued fake-provider scenario intentionally remains the Phase 1
 `lookup_order`/`issue_refund` path. Phase 2's `update_shipping_address` and

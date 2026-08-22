@@ -394,3 +394,8 @@ explicitly advances the milestone, is Phase 3: expand the immutable original sui
 to exactly 25 scenarios, add deterministic state/trace/policy/authorization/
 escalation graders, and add deliberately defective fake-agent behaviors that prove
 those graders detect regressions. No Phase 3 implementation was started here.
+
+Git author identity remained configured, so local commit `e0f9715`
+(`feat: complete EvalGuard Phase 2`) recorded the verified 21-file implementation,
+migration, tests, and durable documentation. The Phase 2 change was not pushed, and
+remote Phase 2 CI was not run.
