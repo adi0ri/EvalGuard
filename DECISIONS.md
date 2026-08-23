@@ -697,3 +697,7 @@ wheel build correctly rejected the duplicate destination.
 Phase 5 intentionally does not add manual retry-failures, token/cost accounting, a
 real provider, or model-quality claims. Those require later scope, and Phase 6
 still requires separate user approval for credentials and possible cost.
+
+Local implementation commit `c481ed4` records the verified Phase 5 decisions and
+behavior. It remains unpushed; `origin/main` remains at published Phase 4 commit
+`ac7d39e`, and no Phase 5 remote-CI result is claimed.

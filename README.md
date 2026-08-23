@@ -8,7 +8,8 @@ Phase 5 adds independently versioned agent prompts, one-to-three trials per case
 transparent aggregate summaries, strict experiment compatibility checks, and a
 small server-rendered comparison report. Phase 4 was pushed as requested;
 `origin/main` is at `ac7d39e`. Phase 5 is locally implemented and verified but is
-not yet pushed, and no new remote-CI result is claimed.
+recorded in implementation commit `c481ed4`, not yet pushed, and no new remote-CI
+result is claimed.
 
 The recorded deterministic-fake results are **synthetic infrastructure
 validation**. The Phase 3–5 evidence proves that the local API, queue, worker,

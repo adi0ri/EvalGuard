@@ -54,6 +54,8 @@ ParcelDesk support domain.
   fresh final-tree 150-execution comparison, and readiness outage/restoration probe
   are recorded in `PROGRESS.md`. These fake-provider
   results are synthetic infrastructure validation, not prompt/model quality.
+  Implementation commit `c481ed4` records the verified milestone locally. Phase 5
+  remains unpushed; `origin/main` remains the published Phase 4 commit `ac7d39e`.
 - Do not begin Phase 6 unless the user explicitly advances the milestone and
   separately approves any credentials and possible spending. No real provider or
   paid API is authorized by Phase 5.

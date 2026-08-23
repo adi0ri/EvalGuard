@@ -337,4 +337,6 @@ result, not evidence that the prompts are equally effective for a real model.
 - [x] Record the final 199-test closure, clean-image 150-execution rerun, exact
   grader-marker reconciliation, and zero-match high-confidence secret/proprietary-
   name scans.
+- [x] Record verified Phase 5 implementation commit `c481ed4`; keep it local and
+  distinguish that checkpoint from published `origin/main` at `ac7d39e`.
 - [ ] Record any observed Phase 3 remote-CI result if it occurs; none is claimed.

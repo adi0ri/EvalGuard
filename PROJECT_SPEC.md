@@ -9,7 +9,8 @@ immutable versioned agent prompts, one-to-three-trial experiments, deterministic
 aggregate summaries/comparisons, and a small server-rendered report. Its final 199
 tests, clean migration round trip, rebuilt clean Compose topology, live 150-execution
 prompt comparison, idempotent replay, and Redis readiness outage/restoration probe
-passed locally. Phase 5 remains uncommitted/unpushed at this checkpoint and no
+passed locally. Implementation commit `c481ed4` records Phase 5 locally; it remains
+unpushed and no
 remote-CI result is claimed. Phase 6 remains out of scope without new explicit
 direction and separate approval for credentials and possible spending.
 
@@ -663,7 +664,8 @@ the exact two-prompt × 25-case × three-trial run, raw evidence counts, report,
 idempotent replay passed. A Redis-down probe retained liveness `200`, changed
 readiness to `503`, and restored readiness to `200`. All results are synthetic
 infrastructure validation. No real provider, token/cost measurement, push, or
-remote-CI result is inferred.
+remote-CI result is inferred. Implementation commit `c481ed4` records this
+verified state locally.
 
 ## Full V1 definition of done
 

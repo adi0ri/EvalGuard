@@ -15,7 +15,8 @@ executions, for 150 raw executions total. The post-review full suite passed all 
 tests in 415.56 seconds, revision `20260822_0008` completed a clean migration round trip,
 the rebuilt Compose topology passed, and the independent live comparison completed
 150/150 executions with 3,042/3,042 passing criteria. Exact evidence is in
-`PROGRESS.md`. Phase 5 has no implementation commit yet and remains local/unpushed;
+`PROGRESS.md`. Implementation commit `c481ed4` records the verified Phase 5 tree,
+which remains local/unpushed;
 `origin/main` is the published Phase 4 documentation commit `ac7d39e`. No Phase 4
 or Phase 5 remote-CI result is claimed.
 
@@ -497,12 +498,12 @@ upstream FastAPI/Starlette `TestClient` deprecation warning is recorded in
 `26c3e86`; Phase 3 commits `083808c` and `6655e79` are published; Phase 4 commits
 `e276ba5` and `ac7d39e` are published; and `origin/main` remains at `ac7d39e`.
 Phase 5 implementation and final-acceptance criteria are checked above from exact
-local evidence and remain uncommitted/unpushed at this checkpoint. No Phase 4 or
+local evidence and recorded in implementation commit `c481ed4` plus its durable
+documentation follow-up. Both remain unpushed. No Phase 4 or
 Phase 5 remote-CI result is claimed.
 
 ## Precise next action
 
-Record the verified Phase 5 implementation in local commits while configured Git
-identity remains available. Do not push Phase 5 or begin Phase 6 without new user
+Wait for explicit user direction. Do not push Phase 5 or begin Phase 6 without new
 direction. A real-provider adapter still requires separate explicit approval for
 credentials and possible spending. Record remote CI only if actually observed.

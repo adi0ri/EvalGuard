@@ -4,7 +4,8 @@ These notes explain the architecture in interview-ready language. Phase 0–5 re
 counts below come from recorded automated and live synthetic evidence. Phase 4 was
 pushed as requested, and `origin/main` is at `ac7d39e`; no new remote-CI result is
 claimed. Phase 5 prompt/trial analysis and reporting are locally implemented and
-verified. Every Phase 5 comparison is **synthetic infrastructure validation**:
+verified in implementation commit `c481ed4`, which remains unpushed. Every Phase 5
+comparison is **synthetic infrastructure validation**:
 the fake deliberately ignores prompt wording, so it does not measure prompt/model
 quality, model latency, tokens, or cost. Phase 6 real-provider work has not started
 and still requires separate explicit approval.
