@@ -23,6 +23,7 @@ def test_experiment_completes_only_after_every_execution_is_terminal(
         provider="deterministic-fake",
         status="queued",
         idempotency_key=f"lifecycle-{uuid4()}",
+        trials=3,
     )
     db_session.add(experiment)
     db_session.flush()
@@ -65,6 +66,7 @@ def test_terminal_infrastructure_failure_wins_after_remaining_work_finishes(
         provider="deterministic-fake",
         status="running",
         idempotency_key=f"lifecycle-failure-{uuid4()}",
+        trials=2,
     )
     db_session.add(experiment)
     db_session.flush()

@@ -80,11 +80,34 @@ class EvaluationCase(Base):
     )
 
 
+class AgentPrompt(Base):
+    """Immutable versioned instructions supplied separately from a case request."""
+
+    __tablename__ = "agent_prompts"
+    __table_args__ = (UniqueConstraint("name", "version", name="uq_agent_prompts_name_version"),)
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    version: Mapped[str] = mapped_column(String(50), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    instructions: Mapped[str] = mapped_column(Text, nullable=False)
+    definition_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class Experiment(Base):
     __tablename__ = "experiments"
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_experiments_idempotency_key"),
         Index("ix_experiments_suite_status", "suite_id", "status"),
+        Index("ix_experiments_agent_prompt_id", "agent_prompt_id"),
+        CheckConstraint(
+            "trials BETWEEN 1 AND 3",
+            name="trials_range",
+        ),
         CheckConstraint(
             "max_attempts BETWEEN 1 AND 5",
             name="max_attempts_range",
@@ -109,9 +132,15 @@ class Experiment(Base):
         ForeignKey("evaluation_suites.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    agent_prompt_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("agent_prompts.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    trials: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
     job_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     max_tool_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
@@ -140,6 +169,10 @@ class CaseExecution(Base):
         CheckConstraint(
             "dispatch_generation >= 1",
             name="dispatch_generation_positive",
+        ),
+        CheckConstraint(
+            "trial_number BETWEEN 1 AND 3",
+            name="trial_number_range",
         ),
     )
 

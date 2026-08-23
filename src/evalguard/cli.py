@@ -14,6 +14,7 @@ from alembic import command
 from evalguard.core.config import get_settings
 from evalguard.core.logging import configure_logging
 from evalguard.db.session import session_scope
+from evalguard.evaluation.prompts import seed_agent_prompts
 from evalguard.evaluation.suite import seed_initial_suite, seed_phase3_suite
 
 
@@ -80,11 +81,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         with session_scope() as session:
             legacy_suite, legacy_case = seed_initial_suite(session)
             suite, cases = seed_phase3_suite(session)
+            prompts = seed_agent_prompts(session)
             payload = {
                 "suite_id": str(suite.id),
                 "suite": f"{suite.name}@{suite.version}",
                 "case_count": len(cases),
                 "definition_hash": suite.definition_hash,
+                "agent_prompts": [
+                    {
+                        "name": prompt.name,
+                        "version": prompt.version,
+                        "definition_hash": prompt.definition_hash,
+                    }
+                    for prompt in prompts
+                ],
                 "legacy_suite": {
                     "suite_id": str(legacy_suite.id),
                     "suite": f"{legacy_suite.name}@{legacy_suite.version}",

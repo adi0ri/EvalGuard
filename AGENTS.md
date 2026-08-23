@@ -37,12 +37,26 @@ ParcelDesk support domain.
   or legacy `enqueue_failed` work. The final 189-test run, migration round trip,
   Compose startup, deterministic live flows, real RQ timeout, actual worker
   interruption, and Redis-outage recovery are recorded in `PROGRESS.md`. Phase 4
-  implementation commit `e276ba5` records the verified milestone. Local `main`
-  remains ahead of `origin/main` at `6655e79`; Phase 4 remains unpushed and no
-  remote CI is claimed.
-- Do not begin Phase 5 or later work unless the user explicitly advances the
-  milestone. Phase 5 has not started; wait for explicit direction before either a
-  Phase 4 push or Phase 5 work, and record later ideas in `PLAN.md` instead.
+  implementation commit `e276ba5` records the verified milestone. Phase 4 was
+  published with documentation commit `ac7d39e`; local and `origin/main` both
+  pointed to `ac7d39e` before Phase 5 work began. No Phase 4 remote-CI result is
+  claimed.
+- Phase 5 implementation and local acceptance are complete. Revision
+  `20260822_0008` adds immutable versioned agent prompts and one-to-three-trial
+  experiment identity without changing either published suite. PostgreSQL prevents
+  prompt/trial relabeling, enforces child trials against their parent, and analysis
+  derives its expected grid from immutable suite membership. Two separate
+  75-execution experiments compare agent prompt v1 with v2 over the same 25 cases
+  and three trials, producing 150 raw execution records. Deterministic summaries,
+  compatible experiment comparison, prompt-aware trace evidence, and a small
+  Jinja2 report are implemented. The final post-review run passed all 199 tests in
+  415.56 seconds. The clean migration round trip, rebuilt clean Compose topology,
+  fresh final-tree 150-execution comparison, and readiness outage/restoration probe
+  are recorded in `PROGRESS.md`. These fake-provider
+  results are synthetic infrastructure validation, not prompt/model quality.
+- Do not begin Phase 6 unless the user explicitly advances the milestone and
+  separately approves any credentials and possible spending. No real provider or
+  paid API is authorized by Phase 5.
 
 ## Engineering rules
 
@@ -139,10 +153,26 @@ ParcelDesk support domain.
   fake provider.
 - Evaluation suites are versioned and immutable; reproducibility-relevant case and
   prompt definitions receive stable hashes.
+- Keep a case's immutable customer request separate from the versioned agent/system
+  prompt. A Phase 5 experiment selects exactly one published agent-prompt hash and
+  one trial count; its case executions cover each `(case, trial_number)` once.
+- Derive summaries and comparisons from authoritative execution/grader rows rather
+  than persisting stale aggregate copies. An execution passes only when it is
+  completed, its complete grader rows match the atomic grader-completion trace
+  vector, and every criterion passes. Missing/partial/nonterminal evidence must
+  never pass vacuously. Quality deltas remain unavailable until both
+  comparable experiments are complete and fully graded.
+- Prompt comparisons require distinct published prompt versions/hashes from one
+  named family and must use the same suite/hash, provider, resilience policy, trial
+  count, and case/trial grid. Reject null/same-prompt and fault-injected arms. Keep
+  token and cost
+  unavailable—not zero—until a provider actually records them, and label derived
+  fake-provider timings as synthetic infrastructure timing rather than model
+  latency.
 
 ## Required verification
 
-Phase 4 completed the following local gate. Preserve its exact evidence in
+Phase 5 completed the following local gate. Preserve its exact evidence in
 `PROGRESS.md`, and rerun the applicable items before any later completion claim
 whose changes could affect them:
 
@@ -194,6 +224,21 @@ whose changes could affect them:
 22. Phase 4 retrieval evidence for policies, attempts, generations, dispatches,
     leases, safe failure kinds, and retry/recovery traces, plus the documented
     worker and CLI recovery entrypoints.
+23. Clean upgrade through Phase 5 revision `20260822_0008`, immutable prompt
+    seeding/hash verification, downgrade to `20260822_0007`, re-upgrade to head,
+    prompt/trial identity and parent/child trial enforcement, and a schema-drift
+    check without changing either suite hash.
+24. PostgreSQL/API coverage for one-to-three trials, exact 75-row case/trial grids,
+    prompt/trial/fault idempotency intent, trial-specific fault targeting,
+    legacy null-prompt replay compatibility, immutable-suite-derived grid
+    completeness, exact grader/completion-vector reconciliation, non-vacuous
+    aggregate metrics, criterion-vector stability,
+    compatibility rejection, provisional/completed comparisons, and server-
+    rendered raw links.
+25. A live deterministic-fake prompt-v1 versus prompt-v2 comparison with two
+    75-execution arms, three trials for each of 25 cases, 150 distinct raw
+    executions, prompt identity in every provider-request trace, summary/comparison
+    retrieval, a 150-link HTML report, and compatible idempotent replay.
 
 Do not claim the milestone is complete while any acceptance item in `PLAN.md` is
 unchecked or unverified.

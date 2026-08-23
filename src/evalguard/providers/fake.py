@@ -33,6 +33,7 @@ from evalguard.evaluation.resilience import (
 )
 
 if TYPE_CHECKING:
+    from evalguard.evaluation.prompts import AgentPromptDefinition
     from evalguard.evaluation.scenarios import ScenarioDefinition
 
 
@@ -121,14 +122,24 @@ class DeterministicFakeProvider:
         expected_order_id: str,
         expected_amount_cents: int,
         tools: ToolRuntime,
+        agent_prompt: AgentPromptDefinition | None = None,
     ) -> dict[str, Any]:
         """Preserve the Phase 1 eligible-refund provider contract exactly."""
 
         self._inject_before_provider()
-        tools.trace(
-            "provider_request",
-            {"provider": self.name, "prompt": prompt, "synthetic": True},
-        )
+        request_payload: dict[str, Any] = {
+            "provider": self.name,
+            "prompt": prompt,
+            "synthetic": True,
+        }
+        if agent_prompt is not None:
+            request_payload["agent_prompt"] = {
+                "name": agent_prompt.name,
+                "version": agent_prompt.version,
+                "definition_hash": agent_prompt.definition_hash,
+                "instructions": agent_prompt.instructions,
+            }
+        tools.trace("provider_request", request_payload)
         lookup = tools.lookup_order(
             LookupOrderArgs(order_id=expected_order_id),
             tool_call_id="fake-lookup-1",
@@ -163,20 +174,26 @@ class DeterministicFakeProvider:
         *,
         definition: ScenarioDefinition,
         tools: ToolRuntime,
+        agent_prompt: AgentPromptDefinition | None = None,
     ) -> dict[str, Any]:
         """Execute a Phase 3 plan, optionally applying one deterministic defect."""
 
         self._inject_before_provider()
-        tools.trace(
-            "provider_request",
-            {
-                "provider": self.name,
-                "behavior_id": self.behavior.value,
-                "scenario_key": definition.key,
-                "prompt": definition.prompt,
-                "synthetic": True,
-            },
-        )
+        request_payload: dict[str, Any] = {
+            "provider": self.name,
+            "behavior_id": self.behavior.value,
+            "scenario_key": definition.key,
+            "prompt": definition.prompt,
+            "synthetic": True,
+        }
+        if agent_prompt is not None:
+            request_payload["agent_prompt"] = {
+                "name": agent_prompt.name,
+                "version": agent_prompt.version,
+                "definition_hash": agent_prompt.definition_hash,
+                "instructions": agent_prompt.instructions,
+            }
+        tools.trace("provider_request", request_payload)
         steps = self._behavior_steps(definition)
         results: dict[str, BaseModel] = {}
         errors: dict[str, str] = {}

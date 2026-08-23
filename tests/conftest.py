@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from evalguard.core.config import get_settings
 from evalguard.db.models import Base, CaseExecution, Customer, Experiment, Order
+from evalguard.evaluation.prompts import DEFAULT_PROMPT_VERSION, seed_agent_prompts
 from evalguard.evaluation.suite import seed_initial_suite, seed_phase3_suite
 from evalguard.workers.queue import get_queue
 
@@ -57,12 +58,19 @@ class SeededDefinition:
     suite_id: UUID
     case_id: UUID
     case_ids_by_key: Mapping[str, UUID]
+    prompt_ids_by_version: Mapping[str, UUID]
 
     def case_id_for(self, case_key: str) -> UUID:
         try:
             return self.case_ids_by_key[case_key]
         except KeyError as exc:
             raise ValueError(f"Seeded suite has no case {case_key!r}") from exc
+
+    def prompt_id_for(self, version: str) -> UUID:
+        try:
+            return self.prompt_ids_by_version[version]
+        except KeyError as exc:
+            raise ValueError(f"Seeded definitions have no prompt {version!r}") from exc
 
 
 def _truncate_application_tables(engine: Engine) -> None:
@@ -195,23 +203,27 @@ def seeded_suite(db_session: Session) -> SeededDefinition:
     # requests while making the canonical Phase 3 inventory the fixture default.
     seed_initial_suite(db_session)
     suite, cases = seed_phase3_suite(db_session)
+    prompts = seed_agent_prompts(db_session)
     db_session.commit()
     case_ids_by_key = {case.key: case.id for case in cases}
     return SeededDefinition(
         suite_id=suite.id,
         case_id=case_ids_by_key["eligible-refund"],
         case_ids_by_key=case_ids_by_key,
+        prompt_ids_by_version={prompt.version: prompt.id for prompt in prompts},
     )
 
 
 @pytest.fixture
 def seeded_legacy_suite(db_session: Session) -> SeededDefinition:
     suite, case = seed_initial_suite(db_session)
+    prompts = seed_agent_prompts(db_session)
     db_session.commit()
     return SeededDefinition(
         suite_id=suite.id,
         case_id=case.id,
         case_ids_by_key={case.key: case.id},
+        prompt_ids_by_version={prompt.version: prompt.id for prompt in prompts},
     )
 
 
@@ -240,6 +252,7 @@ def execution_factory(
         with session_factory.begin() as session:
             experiment = Experiment(
                 suite_id=seeded_suite.suite_id,
+                agent_prompt_id=seeded_suite.prompt_id_for(DEFAULT_PROMPT_VERSION),
                 provider="deterministic-fake",
                 status="queued",
                 idempotency_key=f"fixture-{uuid4()}",

@@ -1,25 +1,20 @@
 # EvalGuard
 
 EvalGuard is a reproducible evaluation harness for tool-using AI agents in the
-wholly fictional ParcelDesk support domain. Phases 0–2 provide the runtime and
-correctness foundation. Phase 3 adds an immutable 25-case queued suite,
-actor-scoped tools, six deterministic grader families, deliberate fake-agent
-defects, and aggregate experiment lifecycle. Phase 4 now implements a PostgreSQL
-transactional outbox, durable attempts/generations/leases, bounded execution
-retries and RQ timeouts, exact tool-step enforcement, worker recovery, and typed
-development/test fault plans. Phase 4 local acceptance is complete: all 189 tests,
-the revision `0007` round trip, Compose startup, deterministic live flows, a real
-RQ timeout, an actual worker SIGKILL, and Redis-outage recovery passed. Its local
-implementation commit is `e276ba5`; local `main` remains ahead of `origin/main` at
-`6655e79`, and Phase 4 remains unpushed with no remote-CI result
-claimed. The recorded Phase 3 automated suite and live 25-case runtime smoke also
-pass. Phase 3 commits `083808c` and `6655e79` are pushed; `origin/main` remains at
-`6655e79`. No Phase 3 remote-CI result is claimed.
+wholly fictional ParcelDesk support domain. Phases 0–4 provide an immutable
+25-case suite, actor-scoped transactional tools, deterministic evidence graders,
+durable PostgreSQL/RQ dispatch, bounded attempts, recovery, and fault controls.
+Phase 5 adds independently versioned agent prompts, one-to-three trials per case,
+transparent aggregate summaries, strict experiment compatibility checks, and a
+small server-rendered comparison report. Phase 4 was pushed as requested;
+`origin/main` is at `ac7d39e`. Phase 5 is locally implemented and verified but is
+not yet pushed, and no new remote-CI result is claimed.
 
 The recorded deterministic-fake results are **synthetic infrastructure
-validation**. The Phase 3 and Phase 4 evidence proves that the local API, queue,
-worker, tools, transaction, trace, grader, recovery, and retrieval paths worked
-together; it is not evidence of real-model quality, latency, token usage, or cost.
+validation**. The Phase 3–5 evidence proves that the local API, queue, worker,
+tools, transaction, trace, grader, recovery, aggregate, and report paths worked
+together; it is not evidence of prompt/model quality, model latency, token usage,
+or cost.
 
 ## Implemented now
 
@@ -27,6 +22,12 @@ together; it is not evidence of real-model quality, latency, token usage, or cos
 - PostgreSQL-backed suites, cases, experiments, executions, customers, orders,
   shipping addresses, refunds, support tickets, tool invocations, trace events, and
   criterion-level grader results.
+- Two published, source-controlled agent prompts with stable content hashes. They
+  are separate from immutable customer-request cases; new experiments persist the
+  selected prompt identity and its provider-request trace evidence.
+- One-to-three trials per case. A three-trial v2 experiment atomically creates the
+  exact 25 × 3 execution/outbox grid, and deterministic fault injection can target
+  one exact case/trial cell.
 - Redis/RQ background dispatch backed by a PostgreSQL transactional outbox.
   Experiment submission atomically persists executions and initial dispatch
   intents, makes a best-effort enqueue pass, and returns `202 Accepted` even when
@@ -84,12 +85,20 @@ together; it is not evidence of real-model quality, latency, token usage, or cos
   results do not depend on the machine's current date.
 - Aggregate experiment lifecycle derived from all case executions: one early case
   cannot complete a 25-case experiment.
+- On-demand experiment summaries with explicit numerators/denominators, criterion
+  families/categories, full-vector trial stability, attempts/retries, and labeled
+  queue/run/end-to-end infrastructure timing. Missing or ungraded work cannot pass
+  vacuously; token and cost availability is explicitly false.
+- Compatible two-arm comparisons and an autoescaped Jinja2 HTML report derived
+  from the same coherent evidence reduction. Comparisons require matching suite/hash,
+  provider, trials, resilience policy, and exact case/trial grid, and reject
+  fault-injected arms.
 - Dependency-independent liveness and PostgreSQL/Redis-aware readiness probes.
-- Seven Alembic revisions (`20260818_0001` through `20260822_0007`) for the initial
+- Eight Alembic revisions (`20260818_0001` through `20260822_0008`) for the initial
   schema, suite sealing, case-move protection, publication serialization, order
   address fields, relational support tickets, ticket/order customer ownership, and
-  Phase 4 resilience state; JSON structured logging; Docker Compose; and a GitHub
-  Actions workflow.
+  Phase 4 resilience state, and Phase 5 prompt/trial identity; JSON structured
+  logging; Docker Compose; and a GitHub Actions workflow.
 
 Revision `20260822_0007` preserves the old queue policy by backfilling existing
 experiments with a 300-second timeout, requeues legacy `running` and `retrying`
@@ -118,6 +127,11 @@ Worker maintenance or bounded CLI reconciliation
   -> recover expired running attempts
   -> publish due current-generation dispatch rows
   -> audit current dispatched-but-unclaimed RQ jobs after 30 seconds
+
+GET summary / comparison / report
+  -> load immutable suite + prompt + execution + criterion evidence coherently
+  -> reduce explicit denominators, stability vectors, attempts, and timing
+  -> return JSON or render the same comparison through Jinja2
 ```
 
 PostgreSQL is the durable source of truth. Redis transports work; it does not own
@@ -157,7 +171,39 @@ every expected state mutation to the policy target, and prevents denied outcomes
 from expecting state mutation. The executor validates case/suite membership for
 queued and completed executions before returning completed replay.
 Phase 4 operational policies and fault plans do not change either published suite
-or case hash.
+or case hash. Phase 5 agent prompts have their own immutable identities and hashes;
+they do not rewrite the customer's case prompt.
+
+## Phase 5 experiment and reporting semantics
+
+Prompt arms are separate experiments. `parceldesk-support-agent@1.0.0` and
+`@2.0.0` are published definitions seeded from source control. A new experiment defaults to v2
+when prompt fields are omitted, while prompt name/version, trial count, resilience
+policy, and exact fault target remain part of the idempotent request intent. A v2
+three-trial arm contains exactly 75 execution cells. PostgreSQL prevents later
+prompt/trial relabeling and rejects a child trial beyond its parent's count. An
+otherwise identical pre-Phase-5 null-prompt experiment can replay only from an
+omitted-prompt, one-trial request; explicit prompt selection conflicts.
+
+An execution counts as graded only if it completed and its complete unique grader
+rows exactly match the atomic `grader_completed` trace vector; it passes only when
+every reconciled criterion passed. Summary ratios retain their numerator and
+denominator.
+Trial stability compares each case's complete ordered criterion vector across all
+trials, so opposite criterion flips cannot hide behind one aggregate bit. The
+analysis derives expected coordinates from immutable suite membership rather than
+observed rows and reports expected/terminal/completed/failed/nonterminal/graded
+counts, grader families and categories, attempts/retries, and descriptive timing
+for the synthetic infrastructure path.
+
+Comparison is allowed only for distinct published prompt versions/hashes from the
+same prompt family, with the same immutable suite/hash, provider, trial count,
+resilience settings, and complete case/trial grid. Any fault-injected arm is
+rejected. Final quality deltas are unavailable while either
+arm is partial or ungraded. The HTML report is a no-JavaScript view over the same
+analysis function as the JSON API; it includes hashes, denominators, limitations,
+and links to raw execution evidence. The deterministic fake deliberately ignores
+semantic prompt differences, so its Phase 5 zero delta proves plumbing only.
 
 ## Phase 4 resilience semantics
 
@@ -211,7 +257,7 @@ Prerequisites are Docker Desktop with Compose and
 [uv](https://docs.astral.sh/uv/). `uv` installs/uses the repository's pinned Python
 3.12 runtime, so a separate `python` command does not need to be on `PATH`.
 
-From the repository root, this setup was exercised for Phase 3 on Windows:
+From the repository root, this setup was exercised for Phase 5 on Windows:
 
 ```powershell
 uv sync --frozen --all-groups
@@ -222,11 +268,10 @@ docker compose exec -T api python -m evalguard.cli seed
 
 The one-shot `migrate` service applies Alembic to the development database before
 the API and worker start. The one-shot `test-db` service safely creates (when
-needed) and migrates the dedicated `evalguard_test` database. The seed command now
-loads/verifies both immutable versions. Automated PostgreSQL tests prove v2 returns
-the same suite and 25 case IDs on replay, preserves v1, and rejects hash drift. The
-live container loader also returned stable v2 identity, hash, and count across two
-runs.
+needed) and migrates the dedicated `evalguard_test` database. The seed command
+loads/verifies both immutable suite versions and both published agent-prompt
+versions, returning their stable hashes. Repeated live seeding returned the same
+identities and hashes.
 
 Check the running API from PowerShell:
 
@@ -243,7 +288,9 @@ The experiment endpoint accepts this JSON shape and an optional
   "suite_name": "parceldesk-refunds",
   "suite_version": "2.0.0",
   "provider": "deterministic-fake",
-  "trials": 1,
+  "prompt_name": "parceldesk-support-agent",
+  "prompt_version": "2.0.0",
+  "trials": 3,
   "max_attempts": 3,
   "job_timeout_seconds": 30,
   "max_tool_steps": 8,
@@ -251,11 +298,13 @@ The experiment endpoint accepts this JSON shape and an optional
 }
 ```
 
-An optional `fault_injection` object has `case_key`, one of the five typed modes
+Prompt fields may be omitted to select the current v2 default. An optional
+`fault_injection` object has `case_key`, `trial_number`, one of the five typed modes
 listed above, and `fail_attempts` (1–5); non-development/test environments reject
 it. It is intentionally omitted from the ordinary request.
 
-The endpoint returns `202` with an experiment ID and 25 execution IDs for v2 after
+The endpoint returns `202` with an experiment ID and 75 execution IDs for this
+three-trial v2 request after
 the durable outbox commit, not after all Redis calls succeed. Concurrent compatible
 requests using the same key converge on one experiment and one outbox row per
 execution generation. Poll
@@ -263,8 +312,11 @@ execution generation. Poll
 order (including a structured shipping address when present), refund, support
 ticket, tool invocations, ordered trace, structured resolution, and grader results
 from `GET /api/v1/executions/{execution_id}`. Experiment retrieval also exposes the
-resilience policy and attempt counts; execution retrieval adds current generation,
-lease/failure summary, ordered attempts, and dispatch history.
+prompt, trial count, resilience policy, and attempt counts; execution retrieval
+adds current generation, lease/failure summary, ordered attempts, and dispatch
+history. `GET /api/v1/experiments/{experiment_id}/summary` derives aggregate
+evidence. Create a second prompt arm with the same settings, then use the comparison
+JSON or report endpoints listed below.
 
 ## Checks
 
@@ -345,23 +397,49 @@ tool calls, 7 refunds, and 5 tickets. Same-key replay kept the same experiment a
 timeout, actual worker-SIGKILL recovery, and automatic recovery of a `202`-accepted
 pending outbox after Redis restoration, each without a duplicate refund. These are
 synthetic infrastructure checks. Implementation commit `e276ba5` records verified
-Phase 4. It remains unpushed and no remote-CI result is claimed; publication
-requires explicit approval.
+Phase 4. The requested publication advanced `origin/main` to `ac7d39e`; no new
+remote-CI result is claimed.
 
-## API implemented through Phase 4
+The Phase 5 locked environment resolved 51 packages and installed the built
+project successfully. Ruff lint passed, Ruff formatting found 74 files already
+formatted, mypy passed 34 source files, and the final post-review suite passed all
+199 tests in 415.56 seconds with the same one known upstream warning.
+
+A clean disposable database upgraded through `20260822_0008`, reported no drift,
+downgraded to `0007`, re-upgraded, and reseeded two stable prompt hashes before the
+exact disposable database was dropped. The first Docker image build found a
+duplicate explicit package-data destination for the report template; removing that
+redundant declaration fixed the build, and final Compose build/startup passed.
+
+The live Phase 5 run completed two prompt arms of 75 executions each. Each arm
+reported 75/75 strict passes, 1,521/1,521 passing criteria, and 25 stable cases; the
+comparison correctly showed zero deterministic-fake delta. The report returned
+HTML with 150 raw-execution links. Raw PostgreSQL evidence contained 150 attempts,
+150 dispatches, 3,042 graders, 264 tool calls, 984 traces, 42 refunds, and 30
+tickets, with 75 provider-request traces for each prompt version. Same-key replay
+preserved all identifiers. With Redis stopped, liveness remained `200`, readiness
+became `503`, and readiness returned to `200` after restoration. These are
+synthetic infrastructure results, not prompt/model quality or model latency.
+
+## API implemented through Phase 5
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health/live` | API-process liveness; does not depend on PostgreSQL or Redis |
 | `GET` | `/health/ready` | Returns `200` only when PostgreSQL and Redis respond; otherwise `503` |
 | `GET` | `/api/v1/suites` | List loaded suite versions and case counts |
+| `GET` | `/api/v1/prompts` | List published agent-prompt versions and content hashes |
 | `POST` | `/api/v1/experiments` | Persist experiment/executions/outbox and best-effort dispatch; return `202` |
 | `GET` | `/api/v1/experiments/{experiment_id}` | Retrieve lifecycle, retry/timeout/step policy, and execution attempt counts |
+| `GET` | `/api/v1/experiments/{experiment_id}/summary` | Derive explicit counts, ratios, stability, attempts, and timing |
+| `GET` | `/api/v1/experiments/{baseline_id}/compare/{candidate_id}` | Compare two compatible, non-faulted prompt arms |
 | `GET` | `/api/v1/executions/{execution_id}` | Retrieve state, attempts, dispatches, lease/failure summary, trace, tool calls, and graders |
+| `GET` | `/reports/experiments/{baseline_id}/compare/{candidate_id}` | Render the shared comparison as autoescaped HTML with raw-evidence links |
 
 A compatible replay of an `Idempotency-Key` returns the existing experiment ID and
 triggers targeted reconciliation for its durable executions; a different
-resilience policy or fault plan conflicts. Concurrent same-key requests are
+prompt, trial count, resilience policy, or exact fault target conflicts. Concurrent
+same-key requests are
 serialized on a dedicated PostgreSQL connection through durable selection/creation,
 then Redis work happens after lock release. The outbox, generation-aware RQ job ID,
 exact job-identity check, attempt claim lock, exact tool-call intent checks,
@@ -371,12 +449,13 @@ converge. The API's initial-work override applies only to queued/legacy
 
 ## Planned, not implemented
 
-Phase 5 has not started. It compares experiments and adds a small server-rendered report. A
-real-provider adapter is optional Phase 6 work and requires explicit approval for
-credentials and possible spending.
+A single real-provider adapter and one controlled experiment are optional Phase 6
+work. Phase 6 has not started and requires separate explicit approval for
+credentials and possible spending. Manual retry-failures and token/cost accounting
+also remain deferred.
 
-There is currently no real model, UI, report, summary/retry API, multi-trial run,
-token/cost accounting, or claim of model performance.
+There is currently no real model, client-side application, manual retry API,
+token/cost data, or claim of prompt/model performance.
 
 ## Project records
 

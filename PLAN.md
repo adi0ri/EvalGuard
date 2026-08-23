@@ -4,22 +4,24 @@ Last updated: 2026-08-22
 
 ## Current milestone
 
-**Phase 4 — implementation and local acceptance complete.** The PostgreSQL
-transactional outbox, execution attempts/generations/leases, bounded retry and RQ
-timeout policy, exact tool-step budget, worker/CLI recovery, typed development/test
-fault plans, and retrieval evidence are implemented. Phase 4 adds no suite or case
-content: published `parceldesk-refunds@1.0.0` and `@2.0.0` and their hashes remain
-unchanged. All local acceptance checkboxes below are verified from exact evidence
-in `PROGRESS.md`: 189 tests passed, revision `0007` completed its migration/backfill
-round trip, and Compose/live timeout/interruption/outage recovery passed. A local
-implementation commit `e276ba5` records verified Phase 4. Local `main` remains
-ahead of `origin/main` at `6655e79`; Phase 4 remains unpushed and no remote-
-CI result is claimed. Phase 5 and later remain out of scope and have not started.
+**Phase 5 — implementation and local acceptance complete.** Two immutable,
+separately hashed agent prompts are now selectable independently of each immutable
+case request. Experiments persist one prompt identity and one-to-three trials;
+summary/comparison APIs derive explicit-denominator correctness, grader, category,
+stability, attempt, and synthetic infrastructure timing metrics from raw rows. A
+small Jinja2 report uses the same comparison function and links every raw execution.
+The verified prompt-v1 and prompt-v2 arms each contain 25 cases × three trials = 75
+executions, for 150 raw executions total. The post-review full suite passed all 199
+tests in 415.56 seconds, revision `20260822_0008` completed a clean migration round trip,
+the rebuilt Compose topology passed, and the independent live comparison completed
+150/150 executions with 3,042/3,042 passing criteria. Exact evidence is in
+`PROGRESS.md`. Phase 5 has no implementation commit yet and remains local/unpushed;
+`origin/main` is the published Phase 4 documentation commit `ac7d39e`. No Phase 4
+or Phase 5 remote-CI result is claimed.
 
-Phase 3 remains complete locally with its recorded 158-test, migration, Compose,
-live-smoke, and readiness evidence. Commits `083808c` and `6655e79` are pushed;
-`origin/main` remains at `6655e79`. No Phase 3 remote-CI result is claimed; it is
-not a Phase 3 local-acceptance prerequisite.
+Phase 4 remains complete with implementation commit `e276ba5` and documentation
+commit `ac7d39e` published on `origin/main`. Earlier Phase 3 commits `083808c` and
+`6655e79` remain published. No later remote-CI result is inferred from a push.
 
 ## Phase 0 — repository and architecture foundation
 
@@ -417,14 +419,51 @@ queued deterministic breadth without mutating that historical definition.
   secret, and proprietary-material audit. Record implementation commit `e276ba5`,
   Phase 4's unpushed status, and that no remote CI is claimed.
 
+## Phase 5 — analysis and report
+
+- [x] Add two source-controlled, published agent prompts with independent stable
+  hashes while preserving both suite versions and all 25 immutable case requests.
+- [x] Add revision `20260822_0008` for prompt rows plus persisted experiment trial
+  count/prompt identity, PostgreSQL trial-range constraints, immutable experiment
+  prompt/trial identity, and a parent-aware child-trial guard.
+- [x] Seed/verify both prompts idempotently and reject mutation of a published
+  prompt in PostgreSQL.
+- [x] Accept one-to-three trials and create exactly one execution/outbox row for
+  every case/trial coordinate; include prompt and trial count in idempotent intent.
+- [x] Preserve compatible replay for one-trial pre-Phase-5 null-prompt experiments
+  only when prompt fields remain omitted; keep fresh omitted-prompt requests bound
+  to v2 and reject explicit prompt relabeling.
+- [x] Make a Phase 4 fault plan target one exact `(case_key, trial_number)` and
+  preserve compatible/conflicting replay behavior for multi-trial requests.
+- [x] Trace agent-prompt name, version, hash, and instructions at the provider
+  boundary while keeping the deterministic fake behavior identical across prompt
+  variants.
+- [x] Add aggregate metrics with explicit numerators/denominators, non-vacuous
+  execution pass semantics, exact grader-row/atomic-completion-trace reconciliation,
+  criterion-vector trial stability, grader/category
+  breakdowns, attempts, and labeled infrastructure timing. Derive the expected
+  grid from immutable suite membership, not observed executions. Keep token/cost
+  unavailable rather than reporting zero.
+- [x] Compare only compatible suite/provider/policy/trial grids, reject
+  fault-injected arms, keep quality deltas unavailable until both arms are complete
+  and fully graded, gate timing/attempt deltas on complete equal samples, and
+  compute candidate-minus-baseline deltas from raw evidence.
+- [x] Add the JSON summary/comparison endpoints and a small autoescaped Jinja2
+  report with a prominent synthetic-validation limitation and raw execution links.
+- [x] Add deterministic PostgreSQL/API/report coverage for exact grids, hashes,
+  immutability, idempotency, provisional/final analysis, incompatible comparisons,
+  missing/partial graders, completion-vector mismatch, vector instability, and
+  report rendering.
+- [x] Run the exact 25-case × two-prompt × three-trial automated workflow, producing
+  and verifying 150 raw executions, 3,042 criterion rows, and prompt trace identity.
+- [x] Run the locked install, Ruff, formatting, mypy, all 199 tests, disposable
+  clean migration/downgrade/re-upgrade, Compose build/startup, repeated seed, live
+  150-execution smoke, idempotent replay, report, and Redis readiness probe.
+- [x] Update every durable document and preserve the no-real-provider/no-cost
+  boundary. Record the initial duplicate-template packaging failure and verified
+  correction.
+
 ## Backlog — do not implement during the current milestone
-
-### Phase 5: analysis and report
-
-- [ ] Add aggregate metrics and experiment comparison.
-- [ ] Compare prompt v1 and v2 across 25 cases and three trials each, producing 150
-  raw reproducible executions.
-- [ ] Add a small Jinja2 or static server-rendered report.
 
 ### Phase 6: optional real provider and portfolio finish
 
@@ -452,17 +491,18 @@ queued deterministic breadth without mutating that historical definition.
 | Documentation drifts from behavior | Update durable documents with the implementing change and gate completion on exercised commands. |
 | A real-provider run introduces cost or secrets | Keep real providers in Phase 6 and require explicit user approval. |
 
-No Phase 0–4 local-acceptance blocker is known. One
+No Phase 0–5 local-acceptance blocker is known. One
 upstream FastAPI/Starlette `TestClient` deprecation warning is recorded in
-`PROGRESS.md`; the final Phase 4 suite passes all 189 tests. Phase 2 is pushed at
-`26c3e86` at the Phase 2 close. Phase 3 commits `083808c` and `6655e79` are pushed,
-and `origin/main` remains at `6655e79`; no Phase 3 remote-CI result is claimed.
-Phase 4 implementation and final-acceptance criteria are checked above
-from the exact local evidence in `PROGRESS.md`. Implementation commit `e276ba5`
-records that verified milestone; local `main` remains ahead of `origin/main` at
-`6655e79`, Phase 4 is unpushed, and no Phase 4 remote-CI result is claimed.
+`PROGRESS.md`; the final Phase 5 suite passes all 199 tests. Phase 2 is published at
+`26c3e86`; Phase 3 commits `083808c` and `6655e79` are published; Phase 4 commits
+`e276ba5` and `ac7d39e` are published; and `origin/main` remains at `ac7d39e`.
+Phase 5 implementation and final-acceptance criteria are checked above from exact
+local evidence and remain uncommitted/unpushed at this checkpoint. No Phase 4 or
+Phase 5 remote-CI result is claimed.
 
 ## Precise next action
 
-Wait for explicit user direction before pushing Phase 4 or starting Phase 5.
-Record remote CI only if actually observed.
+Record the verified Phase 5 implementation in local commits while configured Git
+identity remains available. Do not push Phase 5 or begin Phase 6 without new user
+direction. A real-provider adapter still requires separate explicit approval for
+credentials and possible spending. Record remote CI only if actually observed.

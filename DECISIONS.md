@@ -593,3 +593,107 @@ operational decision without adding a grader family or changing either suite has
 Local implementation commit `e276ba5` records the verified Phase 4 decisions.
 Local `main` remains ahead of `origin/main` at `6655e79`; the milestone
 remains unpushed and no remote-CI result is claimed.
+
+## 2026-08-22 — D023: Version agent prompts independently from immutable cases
+
+**Status:** Accepted and locally verified for Phase 5.
+
+**Reason:** A case prompt describes the fictional customer's request, while an
+agent prompt describes the system instructions being compared. Combining them
+would either mutate a published suite or make it impossible to distinguish the
+experimental treatment from the task definition. Repeated trials also need an
+explicit identity so every case/prompt cell is complete and auditable.
+
+**Alternatives:** Adding prompt variants to the published v2 cases would invalidate
+their hashes and historical results. Storing free-form prompt text directly on an
+experiment would permit silent drift. Putting both prompt arms in one experiment
+would blur lifecycle, idempotency, and comparison identity. Making the new foreign
+key non-null immediately would invent a prompt for legacy experiments.
+
+**Consequences:** `AgentPrompt` is relational, source-controlled, versioned by
+`name` and `version`, content-hashed, and immutable after publication. The two
+independently authored Phase 5 definitions have hashes
+`08724bf556610d9563f27189eb5b298e62a1ce57952885f481c5f8cf93f5ab69`
+and
+`f93d1378329f1156219063cebabfde0cd65e44d08c382541ed600c05140038ad`.
+New API-created experiments must select one published prompt; the nullable foreign
+key honestly represents pre-Phase-5 rows. Prompt identity and `trials` participate
+in idempotency intent. Revision `20260822_0008` constrains trials to 1–3 and each
+execution's trial number to 1–3, makes experiment prompt/trial identity immutable,
+and rejects a child trial beyond its parent's declared count. A v2 experiment with
+three trials creates the exact 25 × 3 grid, and a fault target identifies one case
+and one exact trial. For backward compatibility, an omitted-prompt one-trial request
+may replay an otherwise identical legacy null-prompt row; either explicitly
+supplied prompt field conflicts, while new omitted-prompt creation still binds v2.
+
+The provider-request trace records the prompt name, version, hash, and instructions
+used by that execution. The deterministic fake deliberately follows the same typed
+case plan for either prompt: it validates orchestration and comparison plumbing but
+does not measure prompt quality. The published v1/v2 suite definitions and hashes
+remain unchanged.
+
+## 2026-08-22 — D024: Derive transparent aggregates from one coherent evidence load
+
+**Status:** Accepted and locally verified for Phase 5.
+
+**Reason:** Summary and comparison values must be reproducible from raw rows and
+must not silently treat missing graders as success. Reading separate aggregates in
+separate transactions can also produce a mixed-time snapshot while workers are
+finishing.
+
+**Alternatives:** Persisted rollup tables would make reads cheap but introduce a
+second source of truth and invalidation/recovery machinery. Multiple convenient
+queries would be simpler to write but could observe different lifecycle moments.
+Counting only completed rows as a denominator would hide queued, failed, or
+ungraded work. Comparing only a single aggregate pass bit would miss criteria that
+flip in opposite directions across trials.
+
+**Consequences:** One joined statement loads both requested experiments, prompt
+identity, executions, observed cases, criterion rows, and fault-plan presence.
+One bounded follow-up reads the selected suites' immutable case membership so the
+expected grid cannot shrink to the observed rows. Published-suite triggers make
+that membership stable, while both arms' changing execution evidence comes from
+the same joined read. The application then performs one shared reduction. Every
+ratio exposes numerator, denominator, and value. An execution is graded only when
+it is completed and exactly one valid atomic `grader_completed` trace vector
+matches its complete unique grader rows; it passes only when every reconciled
+criterion passes. Missing, partial, mismatched, ungraded, and nonterminal work
+never pass vacuously. Trial stability compares the complete ordered
+`(grader, criterion, passed)` vector for every case across all requested trials.
+Expected coordinates come from immutable suite membership × declared trials, not
+the observed execution rows, so missing or unexpected cells invalidate comparison.
+Queue, run, and end-to-end timing expose count/min/mean/median/nearest-rank-p95/max
+and are labeled synthetic infrastructure timing, not model latency. Token and cost
+availability are explicitly false because the fake emits neither.
+
+Comparison requires two distinct, published, same-family prompt versions/hashes
+with the same suite version/hash, provider, trial count, resilience policy, and
+exact case/trial grid. Null/same-prompt and fault-injected arms are rejected because
+they do not represent the intended comparable treatment. Quality deltas remain
+unavailable until both arms are terminal and fully graded; partial counts and
+timing may still be inspected per arm without implying a final result. Timing and
+attempt deltas are also withheld until both arms have complete equal samples.
+
+## 2026-08-22 — D025: Render one server-side comparison report from shared analysis
+
+**Status:** Accepted and locally verified for Phase 5.
+
+**Reason:** A portfolio report should be readable without adding a frontend build,
+and its values must not diverge from the JSON comparison API.
+
+**Alternatives:** A React application would add build/runtime surface without
+improving the milestone's evidence. A second report-specific aggregation would risk
+metric drift. Client-side calls would complicate loading/error behavior. Persisted
+HTML would become stale as queued executions finish.
+
+**Consequences:** FastAPI renders a Jinja2 template with autoescaping, inline CSS,
+and no JavaScript. The report and JSON endpoint call the same comparison function;
+the page includes prompt/suite hashes, explicit denominators, limitations, and one
+raw-execution link per selected execution. It is derived on request rather than
+stored. The package relies on Hatch's ordinary package-data inclusion for the
+template; an explicit duplicate force-include was removed after the first Docker
+wheel build correctly rejected the duplicate destination.
+
+Phase 5 intentionally does not add manual retry-failures, token/cost accounting, a
+real provider, or model-quality claims. Those require later scope, and Phase 6
+still requires separate user approval for credentials and possible cost.

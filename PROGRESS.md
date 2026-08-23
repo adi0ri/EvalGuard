@@ -694,3 +694,292 @@ remote-CI result is claimed.
 Phase 5 has not started. The next action is to wait for explicit user direction
 before either pushing Phase 4 or beginning Phase 5. No subsequent documentation
 commit hash is claimed here.
+
+## Phase 4 publication and Phase 5 authorization — 2026-08-22
+
+The user explicitly requested that Phase 4 be pushed and Phase 5 begin. Before
+publication, local `main` contained Phase 4 implementation commit `e276ba5` and
+documentation commit `ac7d39e`, while `origin/main` was `6655e79`. The exact push
+reported:
+
+```text
+6655e79..ac7d39e  main -> main
+```
+
+`git rev-parse HEAD` and `git rev-parse origin/main` then both returned
+`ac7d39e524488bfb61a8c9e6b36051c1bb43c13d`. This is publication evidence only;
+no Phase 4 remote-CI result was observed or claimed. The required repository
+documents and original attached product contract were then read completely before
+Phase 5 code changed.
+
+The key Phase 5 modeling decision was to keep each immutable case's synthetic
+customer request unchanged and introduce separate immutable agent/system prompts.
+Prompt v1 and prompt v2 run as two experiments because an experiment has one
+reproducible prompt identity. Each arm contains 25 cases × three trials = 75
+executions; the comparison pairs those arms for 150 raw executions. The
+deterministic fake records both prompt identities but deliberately follows the same
+typed source-controlled plan, so the result validates infrastructure rather than
+prompt quality.
+
+## Phase 5 implementation — 2026-08-22
+
+- Alembic revision `20260822_0008` and the SQLAlchemy model add published
+  `agent_prompts`, nullable prompt identity for honest legacy experiments, persisted
+  experiment trial count, and PostgreSQL checks limiting experiment/trial values to
+  one through three. The prompt trigger permits only initial publication and then
+  rejects update/delete.
+- Prompt hashes are
+  `08724bf556610d9563f27189eb5b298e62a1ce57952885f481c5f8cf93f5ab69`
+  for `parceldesk-support-agent@1.0.0` and
+  `f93d1378329f1156219063cebabfde0cd65e44d08c382541ed600c05140038ad`
+  for `@2.0.0`. The preserved suite hashes remain
+  `aaedf653770166eb7e967352b9242509a94dd9ba3e4ee833576617c403ec6abd`
+  for v1 and
+  `28289cfdcd98be852b00e451b2f52ae8a9af65a454a6642bb96acb4991a19782`
+  for v2.
+- Experiment creation now makes the complete case/trial grid and includes prompt,
+  trial count, and exact fault trial in idempotent intent. A Phase 4 fault plan
+  targets one `(case_key, trial_number)` rather than all trials for that case.
+- Shared PostgreSQL analysis loads changing evidence together plus immutable suite
+  membership, then implements non-vacuous execution pass semantics,
+  explicit rates, criterion-vector stability, grader/category breakdowns,
+  attempts/retries, and min/mean/median/nearest-rank-p95/max infrastructure timing.
+  Token/cost availability is false rather than a fabricated zero.
+- Compatible comparisons require distinct experiments with the same suite/hash,
+  provider, resilience policy, trial count, and exact case/trial grid. Fault-
+  injected arms are rejected. Quality deltas remain null until both arms complete
+  with grader evidence for every execution.
+- `GET /api/v1/prompts`, the experiment summary and comparison endpoints, and the
+  Jinja2 comparison report are implemented. The report uses the same Python
+  analysis function, autoescaping, inline CSS, a visible synthetic-validation
+  limitation, prompt/suite hashes, and raw execution links.
+- Jinja2 `3.1.6` is a locked direct runtime dependency. No model SDK, API key, real
+  provider, or paid call was added.
+
+## Phase 5 focused and full automated verification — 2026-08-22
+
+| Command | Exact observed result |
+| --- | --- |
+| Focused existing unit/API/RQ/e2e tests | `106 passed, 1 warning in 46.70s`. |
+| New prompt/trial/analysis API tests | `6 passed, 1 warning in 22.02s`. |
+| New exact Phase 5 e2e test | `1 passed, 1 warning in 47.35s`. |
+| `uv run ruff check .` | Succeeded: `All checks passed!`. |
+| `uv run ruff format --check .` | Succeeded: `74 files already formatted`. |
+| `uv run mypy` | Succeeded: no issues found in 34 source files. |
+| `uv run pytest` | Collected 196 tests; `196 passed, 1 warning in 221.25s (0:03:41)`. |
+
+The exact 150-execution automated case verified 150 attempts, 150 dispatches,
+3,042 grader rows, 264 tool invocations, 984 trace events, 42 refunds, and 30
+support tickets. Every execution had isolated customer and order state; all 150
+provider-request traces carried the correct prompt identity (75 per version).
+Both arms passed 75/75 executions and 1,521/1,521 criteria with 25 stable-pass
+cases. These are deterministic synthetic infrastructure counts, not model quality.
+
+The one known dependency-originated FastAPI/Starlette `TestClient` warning remains
+unchanged and did not fail any run. No test was skipped, weakened, or substituted
+with SQLite.
+
+## Phase 5 packaging failure and correction — 2026-08-22
+
+The first final Compose build failed. Hatch already included
+`evalguard/api/templates/comparison.html` as package data, while an explicit
+`force-include` rule attempted to add the same wheel path again. The build backend
+reported:
+
+```text
+ValueError: A second file is being added to the wheel archive at the same path:
+`evalguard/api/templates/comparison.html`.
+```
+
+The redundant force-include rule was removed; the template remained part of the
+ordinary package. `uv lock` then resolved 51 packages in 2 ms, and the repeated
+Compose build installed `evalguard==0.1.0` non-editably with Jinja2 and completed
+successfully. The live container later rendered the report with `200`, proving the
+template was present in the built wheel/image.
+
+The final `uv sync --frozen --all-groups` also rebuilt and installed the local
+project successfully (`Prepared 1 package in 2.41s`, installed in 144 ms).
+
+## Phase 5 disposable migration verification — 2026-08-22
+
+The exact disposable target was
+`evalguard_phase5_final_migration_20260822`; the normal development and test
+databases were not used for destructive cleanup. The verified sequence was:
+
+1. create the blank disposable PostgreSQL database;
+2. upgrade from base through `20260822_0008`;
+3. run `alembic check`, which reported no new upgrade operations;
+4. seed both unchanged suites and both published prompt hashes;
+5. confirm `alembic_version` was `20260822_0008` and two prompt rows were present;
+6. downgrade to `20260822_0007`;
+7. re-upgrade to `20260822_0008` and repeat the no-drift check;
+8. re-seed and confirm the same two prompt hashes/count; and
+9. drop the exact disposable database with forced connection cleanup.
+
+The blank database had no experiments during inspection, as expected. The
+migration does not fabricate a prompt identity for pre-Phase-5 experiment rows;
+their nullable reference remains an honest legacy state, while new API submissions
+always select a published prompt.
+
+## Phase 5 final Compose and live comparison — 2026-08-22
+
+`docker compose config --quiet` passed. After the packaging correction,
+`docker compose build migrate test-db api worker` succeeded and
+`docker compose up -d --wait --wait-timeout 180` exited 0. PostgreSQL, Redis, and
+the API were healthy; the worker was running; and `migrate` plus `test-db` exited
+0. Repeated in-container `evalguard seed` calls returned the same suite, case,
+prompt IDs, and hashes. Liveness and readiness both returned `200`.
+
+The final live submissions returned `202`:
+
+- baseline prompt v1 experiment
+  `575126a2-c921-4afd-858a-146c2878fa61`, with 75 executions;
+- candidate prompt v2 experiment
+  `55ca7503-0048-4e4f-bf11-4f88d36c9601`, with 75 executions.
+
+The Compose worker completed all 150 executions. Each arm reported 75/75 passing
+executions, 1,521/1,521 passing criteria, 25 stable-pass cases, and 75 attempts.
+The compatible comparison was ready and returned zero strict-pass, criterion-pass,
+and stable-case deltas. The HTML report returned `200`, contained the synthetic
+label, and contained exactly 150 raw execution links. Same-key replay of the
+candidate returned `202` with the same experiment and execution IDs.
+
+The direct raw-evidence query for those two experiment IDs returned:
+
+| executions | attempts | dispatches | graders | tools | traces | refunds | tickets |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 150 | 150 | 150 | 3,042 | 264 | 984 | 42 | 30 |
+
+Provider-request traces grouped exactly 75 under prompt version `1.0.0` and 75
+under `2.0.0`. Equal deterministic results are expected because the fake does not
+interpret prompt text; no prompt-quality improvement is claimed.
+
+Redis was then stopped after all work was terminal. Liveness remained `200`,
+readiness returned `503` with PostgreSQL ready and Redis unavailable, and readiness
+returned to `200` after Redis restarted. Final Compose state again showed healthy
+PostgreSQL, Redis, and API, a running worker, and successful one-shot services.
+
+## Phase 5 completion and precise next action — 2026-08-22
+
+Every Phase 5 acceptance item in `PLAN.md` is verified from the evidence above.
+No real/paid provider was called, token/cost data was not invented, and Phase 6 was
+not started. Phase 5 has no local commit at this checkpoint and remains unpushed;
+`origin/main` remains published Phase 4 documentation commit `ac7d39e`. The next
+action is to create local Phase 5 commits while Git identity remains configured,
+then wait for explicit user direction before any Phase 5 push or Phase 6 work.
+
+## Phase 5 release review and integrity corrections — 2026-08-22
+
+Three independent release reviews found defects that the first 196-test checkpoint
+did not cover. All were fixed before milestone closure:
+
+1. An omitted-prompt replay of a pre-Phase-5 idempotency key conflicted because the
+   legacy experiment honestly had `agent_prompt_id = NULL` while request defaults
+   resolved to v2. Omitted prompt fields now match only an otherwise identical
+   one-trial legacy null-prompt experiment. Either explicitly supplied prompt field
+   conflicts, and every fresh omitted-prompt submission still binds v2.
+2. Aggregate denominators were initially derived from observed execution rows, and
+   direct writes could relabel an experiment's prompt/trial identity or attach a
+   child trial beyond the parent count. Expected coordinates now come from immutable
+   suite membership × persisted trials and expose `grid_integrity`. Revision `0008`
+   freezes experiment prompt/trial identity and adds parent-aware child-trial
+   triggers. Invalid grids cannot become terminal/fully graded or comparable;
+   timing and attempt deltas wait for complete equal samples. Prompt comparison
+   additionally requires published, same-family, distinct prompt identities.
+3. A completed execution with any nonempty subset of grader rows initially counted
+   as graded, so deletion of a failing criterion could improve strict pass. Analysis
+   now loads a scoped one-row-per-execution aggregate of `grader_completed` trace
+   evidence. Exactly one structurally valid marker must exactly match the complete
+   canonical persisted grader vector, sorted grader names, and aggregate pass bit.
+   Missing, duplicate, malformed, or mismatched evidence is ungraded. A full-grid
+   regression deletes one failing criterion while retaining a passing row and
+   proves strict pass cannot improve or enable a comparison delta.
+
+Focused post-review evidence included the legacy replay regression; trigger/grid/
+prompt-identity checks; three Phase 5 analysis cases; and the exact 150-execution
+end-to-end case. The final independent audit reported no remaining release blocker
+and no Phase 6, credential, paid-provider, or real-provider scope.
+
+## Phase 5 final closure gates — 2026-08-22
+
+| Command | Exact observed result |
+| --- | --- |
+| `uv sync --frozen --all-groups` | Succeeded: `Checked 50 packages in 8ms`. |
+| `uv run ruff check .` | Succeeded: `All checks passed!`. |
+| `uv run ruff format --check .` | Succeeded: `74 files already formatted`. |
+| `uv run mypy` | Succeeded: no issues found in 34 source files. |
+| `uv run pytest --collect-only -q` | Collected 199 tests in 0.91 seconds; emitted the one known upstream warning. |
+| `uv run pytest` | `199 passed, 1 warning in 415.56s (0:06:55)`. |
+| `git diff --check` | Exit 0; no whitespace error. Git printed only expected LF-to-CRLF notices. |
+| `docker compose config --quiet` | Exit 0 with no output. |
+| `uv run alembic current` | `20260822_0008 (head)`. |
+| `uv run alembic check` | `No new upgrade operations detected.` |
+
+The warning remains FastAPI's installed `TestClient` importing the upstream
+Starlette/httpx compatibility path. No test was skipped, weakened, or replaced by
+SQLite.
+
+The final disposable migration target was
+`evalguard_phase5_closure_migration_20260822`. From blank state it upgraded through
+all eight revisions, reached `20260822_0008 (head)`, reported no drift, seeded both
+unchanged suite hashes and both prompt hashes, and showed one prompt-immutability
+trigger, one experiment-identity trigger, and two child-trial triggers. It then
+downgraded to `0007`, re-upgraded to `0008`, repeated no-drift and seeding, showed
+all three prompt/trial identity triggers after the round trip, and was dropped by
+its exact name. The normal development and test databases were not destructively
+cleaned.
+
+`docker compose build migrate test-db api worker` rebuilt the non-editable package
+successfully. A clean isolated Compose project named `evalguard-phase5-closure`
+created new PostgreSQL/Redis volumes and started on host ports 55432, 56379, and
+58000. `up --no-build -d --wait --wait-timeout 180` exited 0: PostgreSQL, Redis,
+and API were healthy; the worker ran; and `migrate`/`test-db` exited 0. The clean
+database was at revision `0008` with two prompts and all four triggers. Two seed
+runs returned identical suite, case, prompt IDs, and hashes. The built wheel
+contained `evalguard/api/templates/comparison.html`. Liveness and readiness both
+returned `200`.
+
+## Phase 5 final-tree live comparison — 2026-08-22
+
+Fresh submissions against the clean packaged image returned `202`:
+
+- baseline prompt v1: `322e5e82-c779-4acd-9ebe-fbd84c0bc849`, 75 executions;
+- candidate prompt v2: `3ae3afb5-d669-4ee8-bce5-29742abeef38`, 75 executions.
+
+Both completed. Each summary reported 75 expected, 75 graded, 75 passing,
+1,521/1,521 criteria, 25 stable-pass cases, a valid complete grid, and comparison
+readiness. JSON comparison returned `200` and zero strict-pass, criterion-pass, and
+stable-case deltas. The HTML report returned `200`, `text/html`, its prominent
+synthetic label, and exactly 150 raw-execution links. Compatible candidate replay
+returned `202` with the same experiment and all 75 execution IDs.
+
+Scoped PostgreSQL evidence returned:
+
+| executions | attempts | dispatches | graders | tools | traces | refunds | tickets |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 150 | 150 | 150 | 3,042 | 264 | 984 | 42 | 30 |
+
+All 150 executions had customer and order state. Prompt versions split 75/75 in
+provider-request traces. Exactly 150 `grader_completed` events declared 3,042
+criteria, matching all 3,042 grader rows used by the completeness guard.
+
+The first combined Redis stop/probe/restart shell request was rejected by command
+safety before execution, so it changed no state. Split explicit calls then stopped
+only the isolated closure Redis service: liveness stayed `200`, readiness returned
+`503` with PostgreSQL ready and Redis unavailable, Redis restarted, and readiness
+returned to `200`. Final summary/report retrieval still returned `200`. The final
+stack is running and healthy; RQ reports one idle worker, 150 finished jobs, and 0
+failed. The only error-level log entries are the expected Redis reconnect messages
+during that deliberate outage.
+
+All final results remain **synthetic infrastructure validation**. The deterministic
+fake intentionally ignores prompt semantics, no token/cost data exists, no real or
+paid provider was invoked, and Phase 6 was not started. The next action is to record
+local Phase 5 commits if Git identity remains configured. Do not push Phase 5 or
+start Phase 6 without new user direction and separate cost/credential approval.
+
+The final pre-commit audit confirmed configured Git author name/email without
+printing either value. High-confidence secret patterns returned zero matches, and
+the named proprietary-source scan returned zero matches outside integrity-policy
+documents. `git diff --check` remained free of whitespace errors. No unrelated
+user-owned file was removed or overwritten.

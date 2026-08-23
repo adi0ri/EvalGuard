@@ -1,15 +1,15 @@
 # EvalGuard Learning Notes
 
-These notes explain the architecture in interview-ready language. Phase 0–4 result
-counts below come from recorded automated and live synthetic evidence. Phase
-3 commits `083808c` and `6655e79` are pushed; `origin/main` remains at `6655e79`.
-No Phase 3 remote-CI result is claimed. Phase 4 resilience behavior and
-local acceptance are complete, and implementation commit `e276ba5` records that
-verified state. Local `main` remains ahead of `origin/main` at `6655e79`;
-Phase 4 remains unpushed and no remote-CI result is claimed. Phase 5 analysis/
-reporting and Phase 6 real-provider work remain future scope and have not started.
+These notes explain the architecture in interview-ready language. Phase 0–5 result
+counts below come from recorded automated and live synthetic evidence. Phase 4 was
+pushed as requested, and `origin/main` is at `ac7d39e`; no new remote-CI result is
+claimed. Phase 5 prompt/trial analysis and reporting are locally implemented and
+verified. Every Phase 5 comparison is **synthetic infrastructure validation**:
+the fake deliberately ignores prompt wording, so it does not measure prompt/model
+quality, model latency, tokens, or cost. Phase 6 real-provider work has not started
+and still requires separate explicit approval.
 
-## Implemented concepts through Phase 4
+## Implemented concepts through Phase 5
 
 ### FastAPI request flow
 
@@ -25,6 +25,9 @@ reporting and Phase 6 real-provider work remain future scope and have not starte
   before Redis I/O because the outbox owns recovery. Retrieval routes read durable
   state, including policies, attempts, dispatches, leases, shipping addresses,
   support tickets, and aggregate case status; workers evaluate outside the request.
+  Phase 5 adds prompt listing, experiment summaries, strict two-arm comparison, and
+  one server-rendered report. JSON comparison and HTML rendering call the same
+  analysis function rather than making internal HTTP requests.
 - **Why this approach:** FastAPI and Pydantic make validation and response contracts
   explicit while dependency injection gives each request a clear resource
   lifecycle.
@@ -149,6 +152,13 @@ should persist shorter steps and make resume/retry behavior explicit.
   from `0006` to `0007`, reported no drift, downgraded/re-upgraded, repeated
   normalization of restored `running`/`retrying` rows, and removed its exact
   disposable database without touching normal data.
+  Revision `20260822_0008` adds the relational `agent_prompts` table, an honest
+  nullable prompt reference for legacy experiments, bounded experiment trials,
+  and bounded per-execution trial numbers. Prompt rows can transition from draft
+  to published once and are immutable thereafter; experiment prompt/trial identity
+  and child trial bounds are protected in PostgreSQL as well as application code.
+  A clean Phase 5 database upgraded through `0008`, reported no drift, downgraded
+  to `0007`, re-upgraded, and reseeded both prompt hashes before disposal.
 - **Why this approach:** Versioned migrations are reviewable and let schema state
   travel with code. They make deployment changes explicit rather than relying on
   ad hoc table creation.
@@ -294,6 +304,11 @@ should persist shorter steps and make resume/retry behavior explicit.
   permanent error, or by interruption. The API permits this plan only in
   development/test; it is operational test state rather than a hashed scenario or
   another fake behavior ID.
+  In Phase 5, the executor also loads the selected immutable agent prompt and
+  records its name, version, hash, and instructions in the provider-request trace.
+  The fake intentionally does not vary its typed plan by prompt wording. That
+  design exercises prompt identity, trials, aggregation, and reporting while
+  making the resulting zero delta explicitly non-evidence about prompt quality.
 - **Why this approach:** It makes failures reproducible while testing more than a
   mocked route or worker. The result establishes infrastructure correctness, not
   model competence.
@@ -354,6 +369,11 @@ should persist shorter steps and make resume/retry behavior explicit.
   case-key/hash membership. Hashes are not copied onto every execution row. Phase
   4 retry policy, attempts, generations, leases, dispatch rows, and fault plans are
   operational execution state and do not alter either published suite or hash.
+  Phase 5 applies the same identity principle to a different object: an agent
+  prompt has its own name, version, instructions, canonical hash, and publication
+  boundary. It is deliberately separate from the case's fictional customer
+  request. New experiments reference a published prompt, while the nullable
+  database foreign key truthfully identifies pre-Phase-5 legacy rows.
 - **Why this approach:** Explicit identity makes historical results auditable and
   turns definition changes into deliberate new versions.
 - **Alternative and tradeoff:** Git commit identity can locate repository state but
@@ -448,6 +468,14 @@ should persist shorter steps and make resume/retry behavior explicit.
   `TestClient`/httpx deprecation warning. The final count rose by three PostgreSQL
   regressions: two legacy `enqueue_failed` delivery states and one paused-worker
   claim fence.
+  Phase 5 adds PostgreSQL coverage for prompt seeding/hashes/immutability, legacy
+  replay compatibility, exact 25 × trial grids, exact fault targeting, parent/child
+  trial constraints, summaries, compatibility rejection, non-vacuous passing,
+  full-criterion stability, and report rendering. Its end-to-end comparison runs
+  two three-trial prompt arms through the real API/RQ worker path and checks all
+  150 raw execution links. After the compatibility, database-integrity, and grader-
+  completeness regressions were added, the final tree passed all 199 tests in
+  415.56 seconds with the same one known upstream warning.
 - **Why this approach:** The pyramid keeps logic failures cheap to diagnose while a
   small number of boundary-crossing tests catch wiring and lifecycle errors.
 - **Alternative and tradeoff:** Only end-to-end tests are realistic but slow and
@@ -744,6 +772,109 @@ actual worker SIGKILL, and Redis-outage recovery are recorded in `PROGRESS.md`.
 - **Interview explanation:** “Every requested tool call spends budget. Faults are
   operational controls, and transactional rollback makes a retry start clean.”
 
+## Phase 5 experimental-analysis concepts
+
+### Separate prompt treatments and complete trial grids
+
+- **Problem it solves:** A fair prompt comparison must hold the task set and runtime
+  policy constant, identify exactly what instruction changed, and ensure every
+  case received the requested number of trials.
+- **How it works in EvalGuard:** The customer request remains inside the immutable
+  case. The agent/system instruction is a separately published `AgentPrompt` with a
+  name, version, and hash. Each prompt arm is its own experiment. `trials` is
+  bounded from one to three, and creation materializes every immutable suite case ×
+  trial cell with a unique execution/outbox. PostgreSQL protects prompt/trial
+  identity and prevents a child trial from exceeding its parent. Comparison derives
+  the expected grid from suite membership, not merely the rows it happened to
+  observe. Omitted prompt fields still replay a matching one-trial legacy null-
+  prompt experiment, but explicit prompt selection cannot relabel it; fresh
+  requests always bind the current default prompt.
+- **Why this approach:** It separates treatment from task, preserves old evidence,
+  and makes missing cells visible instead of silently shrinking the denominator.
+- **Alternative and tradeoff:** One experiment containing both arms can share
+  setup, but complicates lifecycle and idempotency identity. Copying the agent
+  prompt into cases would mutate the suite and confound task with treatment.
+- **Common failure modes:** Comparing different suite hashes, accepting only the
+  observed subset as complete, allowing prompt identity to change after results
+  exist, or targeting every same-key case when a fault should affect one trial.
+- **Interview explanation:** “The suite defines the tasks; the prompt defines the
+  treatment; the Cartesian case/trial grid proves every task received it.”
+
+### Explicit denominators, non-vacuous pass, and stability
+
+- **Problem it solves:** A result can look perfect when queued, missing, or ungraded
+  work is accidentally excluded, and one aggregate pass bit can hide different
+  criteria flipping between trials.
+- **How it works in EvalGuard:** One joined read loads both arms' changing
+  execution/grader/fault evidence, followed by one bounded lookup of immutable
+  published-suite membership. One shared reduction then computes every ratio with
+  its numerator, denominator, and value. An execution is graded only when it is
+  completed and exactly one valid
+  `grader_completed` trace vector matches its complete unique grader rows; it
+  passes only when every reconciled criterion passes. Counts distinguish expected,
+  terminal, completed, infrastructure-failed, nonterminal, graded, passing,
+  criterion-failing, and ungraded-terminal work. Per-case stability compares the entire
+  ordered `(grader, criterion, passed)` vector across all trials and reports stable
+  pass, stable fail, unstable, or incomplete.
+- **Why this approach:** Denominators and missingness are first-class evidence, and
+  vector comparison preserves which rule changed rather than compressing it away.
+- **Alternative and tradeoff:** Persisted rollups make reads faster but create
+  invalidation and recovery state. Counting only completed rows is simpler but can
+  turn partial execution into a misleading 100%.
+- **Common failure modes:** Treating `all([])` as success, accepting one surviving
+  grader row after a failed criterion disappears, using observed row count as the
+  expected grid, mixing snapshots from many queries, or calling a case
+  stable because every trial had some failure even though different criteria
+  failed.
+- **Interview explanation:** “Missing evidence is not passing evidence. We retain
+  the denominator and compare complete criterion vectors across trials.”
+
+### Compatible comparison, timing labels, and partial results
+
+- **Problem it solves:** Subtracting two percentages is meaningless when the arms
+  use different tasks, policies, trial grids, or injected faults, and partial arms
+  can create unstable operational deltas.
+- **How it works in EvalGuard:** Comparison requires distinct experiments with the
+  same prompt family but distinct published prompt versions/hashes, plus the same
+  suite version/hash, provider, trials, resilience settings, and exact grid;
+  null/same-prompt and fault-injected arms are rejected. Quality, timing, and
+  attempt deltas are gated
+  until both arms have complete equal samples. Before that, each arm's raw counts
+  remain inspectable and the comparison explains why final deltas are unavailable.
+  Queue, run, and end-to-end distributions report count/min/mean/median/nearest-
+  rank-p95/max as synthetic infrastructure timing. Token and cost availability are
+  false rather than zero.
+- **Why this approach:** Compatibility prevents known confounders, while explicit
+  unavailability avoids turning missing measurements into measurements of zero.
+- **Alternative and tradeoff:** Showing every provisional delta feels responsive
+  but encourages conclusions from unequal samples. More formal inference would
+  require a real stochastic provider and an approved experimental design.
+- **Common failure modes:** Comparing faulted and unfaulted arms, labeling worker
+  duration model latency, subtracting unequal partial samples, or reporting missing
+  token/cost values as zero.
+- **Interview explanation:** “First prove the arms are comparable and complete;
+  only then compute deltas. Operational timing is not model latency.”
+
+### Shared server-rendered report
+
+- **Problem it solves:** A human-readable portfolio view should not introduce a
+  second metric implementation or a frontend toolchain.
+- **How it works in EvalGuard:** FastAPI and Jinja2 render an autoescaped, no-
+  JavaScript report from the same comparison function used by the JSON API. The
+  page shows identities and hashes, counts/denominators, deltas or unavailability,
+  stability, timing labels, limitations, and raw execution links. It is derived on
+  demand so it follows durable evidence as work completes.
+- **Why this approach:** One analysis path prevents JSON/HTML drift, and server
+  rendering keeps the milestone small and inspectable.
+- **Alternative and tradeoff:** A React dashboard could add interactivity but also
+  adds a build, client state, and duplicate error/loading behavior. Stored HTML can
+  be archived, but becomes stale unless regenerated transactionally.
+- **Common failure modes:** Recomputing metrics in the template, failing to
+  autoescape dynamic text, hiding hashes/denominators, or presenting fake-provider
+  deltas without the synthetic-validation label.
+- **Interview explanation:** “The report is a view over the same evidence contract,
+  not another analytics system.”
+
 ## Interview questions to practice
 
 1. Why does experiment creation return 202 rather than waiting for the agent?
@@ -796,3 +927,15 @@ actual worker SIGKILL, and Redis-outage recovery are recorded in `PROGRESS.md`.
     suite definitions or a new grader family?
 32. Why does a missing or terminal RQ job before claim consume one interrupted
     execution attempt, while a Redis publication error does not?
+33. Why are the agent prompt and the customer's case prompt versioned separately?
+34. How does the expected case/trial grid prevent partial evidence from looking
+    complete?
+35. Why is a completed execution with zero grader rows not a pass?
+36. What does full criterion-vector stability reveal that pass-rate stability can
+    hide?
+37. Which compatibility checks must hold before two experiments can be compared?
+38. Why are Phase 5 timing values labeled infrastructure timing rather than model
+    latency?
+39. Why do the JSON comparison and HTML report share one analysis function?
+40. What does the deterministic fake's zero prompt delta prove, and what does it
+    explicitly not prove?

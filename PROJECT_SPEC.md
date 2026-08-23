@@ -2,20 +2,16 @@
 
 ## Status
 
-Phase 0, Phase 1, and Phase 2 are complete. Phase 3 implementation and local
-acceptance are complete: 158 tests, locked installation, static checks, the clean
-`20260822_0006` migration round trip, Compose startup, a live 25-case smoke, and a
-Redis-unavailable readiness probe passed. Phase 3 commits `083808c` and `6655e79`
-are pushed; `origin/main` remains at `6655e79`. No Phase 3 remote-CI result is
-claimed. Phase 4
-resilience implementation and local acceptance are complete, including revision
-`20260822_0007`, 189 passing tests, its migration/backfill round trip, Compose and
-live recovery checks, a real RQ timeout, an actual worker interruption, and Redis-
-outage recovery. Local implementation commit `e276ba5` records verified Phase 4;
-local `main` remains ahead of `origin/main` at `6655e79`. Phase 4 remains
-unpushed and no remote-CI result is claimed. This specification defines the
-implemented Phase 4 behavior and remaining V1 contract. Phase 5 has not started and
-later requirements remain out of scope until explicitly advanced.
+Phases 0–5 are implemented and locally accepted. Phase 4 implementation commit
+`e276ba5` and documentation commit `ac7d39e` are published on `origin/main`; no
+Phase 4 remote-CI result is claimed. Phase 5 adds revision `20260822_0008`, two
+immutable versioned agent prompts, one-to-three-trial experiments, deterministic
+aggregate summaries/comparisons, and a small server-rendered report. Its final 199
+tests, clean migration round trip, rebuilt clean Compose topology, live 150-execution
+prompt comparison, idempotent replay, and Redis readiness outage/restoration probe
+passed locally. Phase 5 remains uncommitted/unpushed at this checkpoint and no
+remote-CI result is claimed. Phase 6 remains out of scope without new explicit
+direction and separate approval for credentials and possible spending.
 
 ## Product outcome
 
@@ -23,11 +19,13 @@ EvalGuard's V1 target is a reproducible evaluation harness for tool-using AI
 agents. It runs a support agent against versioned, stateful scenarios; records
 responses, tool calls, database changes, failures, latency, token use, and cost
 when those values exist; grades primary correctness deterministically; and
-ultimately compares experiments by correctness, policy compliance, stability,
-latency, and cost. The current system records lifecycle timestamps, durable
-dispatch and execution-attempt evidence, safe failure classifications, and
-terminal failure text, but it does not derive comparison/latency metrics or record
-tokens/cost.
+compares experiments by correctness, policy compliance, stability, and available
+operational measurements. The current system derives explicit-denominator
+correctness, grader-family/category, criterion-vector stability, attempts, queue
+delay, execution duration, and end-to-end duration from persisted evidence. Fake-
+provider timing is labeled synthetic infrastructure timing, not model latency.
+Token usage and cost remain explicitly unavailable because no current provider
+records them; they are never fabricated or represented as measured zero.
 
 The domain is an independently invented business named ParcelDesk. Synthetic
 business state contains customers, orders with relational shipping-address fields,
@@ -38,16 +36,20 @@ exercise.
 ## Users and core workflow
 
 The initial user is a developer or evaluator comparing agent behavior. In the
-current Phase 4 workflow, that user:
+current Phase 5 workflow, that user:
 
 1. loads the preserved one-case legacy suite and the immutable 25-case v2 suite;
-2. submits an experiment;
-3. receives `202 Accepted` after the experiment, all 25 case executions, and their
+2. loads two immutable agent-prompt variants and submits one experiment for each,
+   selecting three trials per case;
+3. receives `202 Accepted` after each experiment, all 75 case executions, and their
    initial PostgreSQL dispatch intents are stored;
 4. lets RQ workers run the deterministic fake provider across those executions;
-5. retrieves the aggregate experiment and individual executions; and
-6. inspects the stored business outcome, ordered trace, criterion-level grader
-   result, attempts, dispatch generations, leases, and safe failure evidence.
+5. retrieves each experiment, its deterministic summary, and individual raw
+   executions;
+6. compares the compatible 75-execution arms and opens the server-rendered report;
+   and
+7. inspects stored business outcomes, prompt-aware ordered traces, criterion-level
+   graders, attempts, dispatches, stability, and raw execution links.
 
 The deterministic fake follows each case's typed, hashed plan through the same four
 production tools used by the worker. Six deterministic grader families then inspect
@@ -56,6 +58,11 @@ structured resolution evidence. An experiment stays running while any of its cas
 executions is nonterminal, completes only when all complete, and fails when every
 case is terminal and at least one failed. These results remain synthetic
 infrastructure validation rather than model-quality evidence.
+
+The deterministic fake records the selected agent prompt name, version, hash, and
+instructions at the provider boundary but deliberately follows the same typed plan
+for both variants. Equal fake results validate trial, aggregation, comparison, and
+report plumbing; they do not establish that either prompt is better.
 
 ## Current milestone scope
 
@@ -223,9 +230,51 @@ infrastructure validation rather than model-quality evidence.
   dispatch history. Phase 4 adds no new correctness grader family and does not
   mutate either published suite, any case definition, or their hashes.
 
+### Phase 5: reproducible analysis and report
+
+- Revision `20260822_0008` adds `agent_prompts`, nullable prompt identity on legacy
+  experiments, a persisted trial count for every experiment, and PostgreSQL checks
+  limiting new experiment/trial coordinates to one through three. Existing
+  experiments remain truthfully unversioned rather than receiving a fabricated
+  historical prompt identity. Database triggers prevent later prompt/trial relabeling
+  of an experiment and reject a case-execution trial beyond its parent's declared
+  count.
+- `parceldesk-support-agent@1.0.0` is the concise baseline and `@2.0.0` is the
+  policy-explicit candidate. Their canonical hashes cover prompt name, version,
+  and instructions. A PostgreSQL trigger permits only the initial publish
+  transition and rejects later update/delete. The case customer request remains in
+  its existing immutable suite; neither v1 nor v2 suite content/hash changes.
+- One experiment selects one prompt and one trial count. Nested case/trial creation
+  produces 75 executions for the 25-case suite at three trials while preserving
+  `(experiment_id, case_id, trial_number)` uniqueness and one generation-1 outbox
+  row per execution. Prompt identity, trial count, resilience policy, and the exact
+  case/trial fault target participate in API idempotency intent. A pre-Phase-5
+  null-prompt experiment can replay only when both prompt fields remain omitted,
+  it has one trial, and every other request field matches; any explicit prompt
+  selection conflicts. Fresh omitted-prompt submissions bind the current default.
+- Aggregate analysis loads both arms' changing experiment/execution/grader/fault
+  evidence together, then reads immutable published-suite membership so the
+  expected grid is not derived from whichever executions happen to exist. An
+  execution is graded only when completed and its complete unique grader-row
+  vector exactly matches the atomic `grader_completed` trace vector; it passes only
+  when every reconciled criterion passes.
+  Rates expose numerators and denominators; incomplete or ungraded work cannot pass
+  vacuously. Trial stability compares the complete ordered criterion pass/fail
+  vector, so two trials failing different criteria are unstable.
+- Comparisons require distinct published prompt versions/hashes from one named
+  prompt family, plus the same suite/hash, provider, trial count, resilience policy,
+  and case/trial grid; null/same-prompt and fault-injected arms are rejected.
+  Candidate-minus-baseline quality deltas stay unavailable until both arms are
+  complete and fully graded. Derived metrics are not copied into mutable aggregate
+  tables, so API and report always use authoritative raw evidence.
+- The Jinja2 report calls the same analysis function as the JSON endpoint, uses
+  autoescaping and inline CSS only, labels results synthetic infrastructure
+  validation, shows prompt/suite hashes and limitations, and links all 150 raw
+  execution endpoints. There is no React, JavaScript application, or real model.
+
 ## Target V1 domain contract
 
-The current product through Phase 4 exposes these four typed tools:
+The current product through Phase 5 exposes these four typed tools:
 
 - `lookup_order`
 - `update_shipping_address`
@@ -271,7 +320,7 @@ FastAPI
   -> deterministic graders
   -> PostgreSQL grader results
   -> retrieval API
-  -> later server-rendered experiment report
+  -> server-rendered experiment comparison report
 
 Worker startup/maintenance or CLI
   -> recover expired running attempts
@@ -301,7 +350,8 @@ API and worker processes share the same application code and PostgreSQL data.
 | --- | --- |
 | `EvaluationSuite` | Immutable, versioned collection of evaluation cases |
 | `EvaluationCase` | Reproducible scenario definition, fixtures, expectations, and hashes |
-| `Experiment` | A submitted evaluation configuration and aggregate lifecycle |
+| `AgentPrompt` | Published, immutable agent instructions with a version and canonical hash |
+| `Experiment` | One suite/prompt/provider/policy/trial configuration and aggregate lifecycle |
 | `CaseExecution` | One case/trial execution with isolated state and aggregate attempt status |
 | `ExecutionAttempt` | One claimed provider/tool run with generation, lease, steps, outcome, and safe failure evidence |
 | `ExecutionDispatch` | One durable PostgreSQL-to-RQ publication intent for an execution generation |
@@ -321,6 +371,9 @@ API and worker processes share the same application code and PostgreSQL data.
   membership changes and prevent mutation/deletion of the suite or
   insertion/mutation/movement/deletion of its cases after publication.
 - Case and prompt definitions have reproducible hashes.
+- The case prompt is the immutable synthetic customer request. Agent/system
+  instructions are a separate published `AgentPrompt`; new experiments reference
+  exactly one prompt row while honest pre-Phase-5 rows may remain null.
 - The v2 case hash covers the stable key, title, prompt, typed fixture, independent
   expected policy oracle, and deterministic fake plan. The suite hash covers
   ordered case-key/hash membership.
@@ -333,6 +386,8 @@ API and worker processes share the same application code and PostgreSQL data.
   requester customer from the case fixture; provider-controlled tool arguments do
   not choose that actor.
 - `(experiment_id, case_id, trial_number)` is unique.
+- An experiment records one `trials` value from one through three; its selected
+  execution grid contains each suite case and each trial number exactly once.
 - Experiment acceptance atomically inserts each new case execution and its
   generation-1 `ExecutionDispatch`; `(case_execution_id, generation)` and `job_id`
   are each unique. A pending current-generation dispatch remains recoverable until
@@ -401,7 +456,7 @@ API and worker processes share the same application code and PostgreSQL data.
   nonterminal, including `queued`, `running`, or `retrying`, it is `running`; after
   all are terminal it is `failed` if any failed or `completed` otherwise.
 - Development/test fault plans are limited to the typed deterministic modes and a
-  selected case execution. Non-development/test API environments reject them, and
+  selected case/trial execution. Non-development/test API environments reject them, and
   the executor independently refuses a persisted plan there.
   Operational policy, attempts, dispatches, and fault plans do not participate in
   immutable suite/case hashes.
@@ -413,10 +468,13 @@ The V1 API provides endpoints equivalent to:
 - `GET /health/live`
 - `GET /health/ready`
 - `GET /api/v1/suites`
+- `GET /api/v1/prompts`
 - `POST /api/v1/experiments`
 - `GET /api/v1/experiments/{experiment_id}`
 - `GET /api/v1/experiments/{experiment_id}/summary`
+- `GET /api/v1/experiments/{baseline_experiment_id}/compare/{candidate_experiment_id}`
 - `GET /api/v1/executions/{execution_id}`
+- `GET /reports/experiments/{baseline_experiment_id}/compare/{candidate_experiment_id}`
 - `POST /api/v1/experiments/{experiment_id}/retry-failures`
 
 The current API provides liveness/readiness, experiment submission, and sufficient
@@ -426,12 +484,13 @@ initial dispatch intents commit in PostgreSQL. Immediate Redis publication reduc
 latency but is not an acceptance precondition; failure leaves the execution queued
 with a pending outbox row and safe dispatch error for later reconciliation.
 
-The creation endpoint accepts `max_attempts` (1–5), `job_timeout_seconds` (1–300),
+The creation endpoint accepts a published agent-prompt name/version, `trials`
+(1–3), `max_attempts` (1–5), `job_timeout_seconds` (1–300),
 `max_tool_steps` (1–100), and `retry_backoff_seconds` (0–300). It also accepts one
-typed case-scoped deterministic fault plan only when the application environment is
+typed case/trial-scoped deterministic fault plan only when the application environment is
 development or test. These settings and the fault plan are part of idempotent
-request intent. Reuse of an `Idempotency-Key` with a different suite, provider,
-policy, or fault plan returns `409`.
+request intent. Reuse of an `Idempotency-Key` with a different suite, prompt,
+trials, provider, policy, or fault plan returns `409`.
 
 Concurrent requests for one key are serialized by a PostgreSQL advisory lock on a
 dedicated connection/session while the API selects or creates the durable
@@ -446,11 +505,13 @@ a queued job. Ordinary maintenance also audits a dispatched-but-unclaimed curren
 generation after 30 seconds and recovers missing or non-runnable exact jobs through
 the attempt budget.
 
-Experiment retrieval exposes policy and per-execution attempt counts. Execution
+Experiment retrieval exposes prompt identity, trial count, policy, and per-
+execution attempt counts. Execution
 retrieval includes structured order addresses and tickets plus the attempt count,
 current generation, lease/failure summary, ordered attempt records, and complete
-dispatch history. Summary and manual retry-failures endpoints remain target V1
-work, not current Phase 4 endpoints.
+dispatch history. Summary/comparison endpoints and the HTML comparison report are
+implemented in Phase 5. The mutating manual retry-failures endpoint remains
+planned; automatic bounded Phase 4 recovery is unchanged.
 
 ## Reproducibility and evidence
 
@@ -460,9 +521,11 @@ work, not current Phase 4 endpoints.
   prompt, fixtures, expectations, and case hash; the suite row stores its version
   and suite hash. The execution stores provider selection, trial number, ordered
   trace, final resolution, business-state linkage, criterion-level results, and
-  operational attempt/dispatch linkage. Phase 1 does not duplicate the case/prompt
-  hash onto the execution row, and Phase 4 operational records do not alter the
-  published v1/v2 definitions or their hashes.
+  operational attempt/dispatch linkage. A new experiment also references its
+  separate immutable agent-prompt hash. The provider-request trace records the
+  selected prompt identity/instructions. Case/suite hashes are not duplicated on
+  every execution row, and Phase 4/5 operational records do not alter the published
+  v1/v2 definitions or their hashes.
 - Metrics are reported only when committed code produces them through a documented
   command.
 - Fake-provider results are labeled synthetic infrastructure validation, not
@@ -509,6 +572,17 @@ work, not current Phase 4 endpoints.
   real RQ timeout, an actual worker SIGKILL, and Redis-outage outbox recovery. The
   final three PostgreSQL cases cover terminal/missing legacy `enqueue_failed`
   delivery and a recovered paused worker fenced before effects.
+- **Phase 5 analysis tests** cover immutable prompt hashes, one-to-three trial
+  constraints, exact 75-row grids, case/trial fault intent, idempotent replay,
+  legacy replay, database identity guards, immutable-suite-derived grid integrity,
+  non-vacuous pass rules, grader/completion-vector reconciliation,
+  criterion-vector stability, explicit denominators,
+  provisional/completed deltas, incompatible and fault-injected comparison
+  rejection, HTML/raw links, and prompt-aware traces. The final full run collected
+  and passed all 199 tests in 415.56 seconds with the same one known dependency
+  warning. Its end-to-end case completed two 75-execution arms and verified 150
+  executions, 3,042 graders, 264 tool invocations, 984 trace events, 42 refunds,
+  and 30 tickets.
 - **End-to-end tests** cross the API, queue, worker, tools, persistence, grader, and
   retrieval boundary with the deterministic fake provider.
 - **Smoke tests** verify container startup, clean migration, liveness, and readiness
@@ -578,12 +652,25 @@ startup; and a documented recovery pass. `PROGRESS.md` records the exact local
 results. Implementation commit `e276ba5` records that verified state; push and
 remote CI remain separate, unclaimed events.
 
+## Phase 5 definition of done
+
+Phase 5 completed locally after the acceptance items in `PLAN.md` were verified.
+Revision `20260822_0008` upgraded a blank PostgreSQL database, reported no drift,
+downgraded to `0007`, re-upgraded, re-seeded both prompt hashes, and was dropped.
+Locked dependencies, Ruff, formatting, mypy, all 199 PostgreSQL/Redis/RQ/API/report
+tests, Compose build/startup, repeated prompt/suite seeding, live health/readiness,
+the exact two-prompt × 25-case × three-trial run, raw evidence counts, report, and
+idempotent replay passed. A Redis-down probe retained liveness `200`, changed
+readiness to `503`, and restored readiness to `200`. All results are synthetic
+infrastructure validation. No real provider, token/cost measurement, push, or
+remote-CI result is inferred.
+
 ## Full V1 definition of done
 
-In addition to the completed Phase 0–4 foundation and the four implemented typed
-tools, V1 still requires aggregate experiment comparison, a small server-rendered
-report, and the documented 25-case, two-prompt, three-trial comparison producing 150 raw,
-reproducible executions. The optional real-provider adapter and real run occur only
-after explicit approval. Final documentation must explain architecture,
+The deterministic V1 foundation through Phase 5 is complete: four typed tools, 25
+immutable cases, two immutable agent prompts, three trials per prompt/case, 150 raw
+reproducible executions, deterministic summaries/comparison, and a small server-
+rendered report. The optional Phase 6 real-provider adapter and real run occur only
+after explicit approval. Any later portfolio finish must preserve architecture,
 methodology, limitations, demo steps, provenance, and the precise source of every
 reported number.

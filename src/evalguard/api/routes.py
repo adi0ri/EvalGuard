@@ -1,4 +1,4 @@
-"""Suite, experiment, and execution endpoints through Phase 4."""
+"""Suite, prompt, experiment, analysis, and execution endpoints through Phase 5."""
 
 import hashlib
 import logging
@@ -13,16 +13,20 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from evalguard.api.schemas import (
+    AgentPromptSummary,
     CustomerRead,
     ExecutionAttemptRead,
     ExecutionBrief,
     ExecutionDetail,
     ExecutionDispatchRead,
     ExperimentAccepted,
+    ExperimentComparisonRead,
     ExperimentCreate,
     ExperimentDetail,
+    ExperimentSummaryRead,
     GraderResultRead,
     OrderRead,
+    PromptIdentityRead,
     RefundRead,
     ShippingAddressRead,
     SuiteSummary,
@@ -32,6 +36,7 @@ from evalguard.api.schemas import (
 )
 from evalguard.core.config import get_settings
 from evalguard.db.models import (
+    AgentPrompt,
     CaseExecution,
     Customer,
     EvaluationCase,
@@ -48,6 +53,12 @@ from evalguard.db.models import (
     TraceEvent,
 )
 from evalguard.db.session import get_db
+from evalguard.evaluation.analysis import (
+    ExperimentAnalysisNotFoundError,
+    ExperimentComparisonConflictError,
+    analyze_experiment,
+    compare_experiments,
+)
 from evalguard.workers.dispatch import create_dispatch, reconcile_pending_dispatches
 
 logger = logging.getLogger(__name__)
@@ -152,9 +163,14 @@ def _execution_rows(session: Session, experiment_id: UUID) -> list[CaseExecution
 def _fault_intent(
     session: Session,
     experiment_id: UUID,
-) -> tuple[str, str, int] | None:
+) -> tuple[str, int, str, int] | None:
     row = session.execute(
-        select(EvaluationCase.key, ExecutionFaultPlan.mode, ExecutionFaultPlan.fail_attempts)
+        select(
+            EvaluationCase.key,
+            CaseExecution.trial_number,
+            ExecutionFaultPlan.mode,
+            ExecutionFaultPlan.fail_attempts,
+        )
         .join(CaseExecution, CaseExecution.case_id == EvaluationCase.id)
         .join(
             ExecutionFaultPlan,
@@ -164,13 +180,14 @@ def _fault_intent(
     ).one_or_none()
     if row is None:
         return None
-    return str(row.key), str(row.mode), int(row.fail_attempts)
+    return str(row.key), int(row.trial_number), str(row.mode), int(row.fail_attempts)
 
 
 def _request_matches_experiment(
     session: Session,
     experiment: Experiment,
     suite_id: UUID,
+    agent_prompt_id: UUID,
     payload: ExperimentCreate,
 ) -> bool:
     requested_fault = payload.fault_injection
@@ -180,13 +197,26 @@ def _request_matches_experiment(
         if requested_fault is None
         else (
             requested_fault.case_key,
+            requested_fault.trial_number,
             requested_fault.mode.value,
             requested_fault.fail_attempts,
         )
     )
+    prompt_fields_were_omitted = {
+        "prompt_name",
+        "prompt_version",
+    }.isdisjoint(payload.model_fields_set)
+    prompt_matches = experiment.agent_prompt_id == agent_prompt_id or (
+        experiment.agent_prompt_id is None
+        and experiment.trials == 1
+        and payload.trials == 1
+        and prompt_fields_were_omitted
+    )
     return (
         experiment.suite_id == suite_id
+        and prompt_matches
         and experiment.provider == payload.provider
+        and experiment.trials == payload.trials
         and experiment.max_attempts == payload.max_attempts
         and experiment.job_timeout_seconds == payload.job_timeout_seconds
         and experiment.max_tool_steps == payload.max_tool_steps
@@ -235,6 +265,26 @@ def list_suites(session: SessionDependency) -> list[SuiteSummary]:
     ]
 
 
+@router.get("/prompts", response_model=list[AgentPromptSummary])
+def list_agent_prompts(session: SessionDependency) -> list[AgentPromptSummary]:
+    prompts = session.scalars(
+        select(AgentPrompt)
+        .where(AgentPrompt.is_published.is_(True))
+        .order_by(AgentPrompt.name, AgentPrompt.version)
+    ).all()
+    return [
+        AgentPromptSummary(
+            id=prompt.id,
+            name=prompt.name,
+            version=prompt.version,
+            description=prompt.description,
+            instructions=prompt.instructions,
+            definition_hash=prompt.definition_hash,
+        )
+        for prompt in prompts
+    ]
+
+
 def _create_experiment(
     payload: ExperimentCreate,
     response: Response,
@@ -250,6 +300,15 @@ def _create_experiment(
     )
     if suite is None:
         raise HTTPException(status_code=404, detail="Evaluation suite version not found")
+    agent_prompt = session.scalar(
+        select(AgentPrompt).where(
+            AgentPrompt.name == payload.prompt_name,
+            AgentPrompt.version == payload.prompt_version,
+            AgentPrompt.is_published.is_(True),
+        )
+    )
+    if agent_prompt is None:
+        raise HTTPException(status_code=404, detail="Agent prompt version not found")
 
     cases = list(
         session.scalars(
@@ -279,7 +338,13 @@ def _create_experiment(
             select(Experiment).where(Experiment.idempotency_key == idempotency_key)
         )
         if existing is not None:
-            if not _request_matches_experiment(session, existing, suite.id, payload):
+            if not _request_matches_experiment(
+                session,
+                existing,
+                suite.id,
+                agent_prompt.id,
+                payload,
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail="Idempotency-Key was already used for a different experiment",
@@ -289,9 +354,11 @@ def _create_experiment(
 
     experiment = Experiment(
         suite_id=suite.id,
+        agent_prompt_id=agent_prompt.id,
         provider=payload.provider,
         status="queued",
         idempotency_key=idempotency_key,
+        trials=payload.trials,
         max_attempts=payload.max_attempts,
         job_timeout_seconds=payload.job_timeout_seconds,
         max_tool_steps=payload.max_tool_steps,
@@ -303,16 +370,23 @@ def _create_experiment(
         CaseExecution(
             experiment_id=experiment.id,
             case_id=case.id,
-            trial_number=1,
+            trial_number=trial_number,
             status="queued",
         )
         for case in cases
+        for trial_number in range(1, payload.trials + 1)
     ]
     session.add_all(executions)
     session.flush()
-    for execution, case in zip(executions, cases, strict=True):
+    cases_by_id = {case.id: case for case in cases}
+    for execution in executions:
+        case = cases_by_id[execution.case_id]
         create_dispatch(session, execution.id, generation=1)
-        if requested_fault is not None and case.key == requested_fault.case_key:
+        if (
+            requested_fault is not None
+            and case.key == requested_fault.case_key
+            and execution.trial_number == requested_fault.trial_number
+        ):
             session.add(
                 ExecutionFaultPlan(
                     case_execution_id=execution.id,
@@ -359,6 +433,13 @@ def get_experiment(experiment_id: UUID, session: SessionDependency) -> Experimen
     suite = session.get(EvaluationSuite, experiment.suite_id)
     if suite is None:
         raise HTTPException(status_code=500, detail="Experiment suite is missing")
+    prompt = (
+        None
+        if experiment.agent_prompt_id is None
+        else session.get(AgentPrompt, experiment.agent_prompt_id)
+    )
+    if experiment.agent_prompt_id is not None and prompt is None:
+        raise HTTPException(status_code=500, detail="Experiment agent prompt is missing")
 
     rows = session.execute(
         select(CaseExecution, EvaluationCase)
@@ -371,9 +452,19 @@ def get_experiment(experiment_id: UUID, session: SessionDependency) -> Experimen
         suite_id=suite.id,
         suite_name=suite.name,
         suite_version=suite.version,
+        prompt=(
+            None
+            if prompt is None
+            else PromptIdentityRead(
+                name=prompt.name,
+                version=prompt.version,
+                definition_hash=prompt.definition_hash,
+            )
+        ),
         provider=experiment.provider,
         status=experiment.status,
         idempotency_key=experiment.idempotency_key,
+        trials=experiment.trials,
         max_attempts=experiment.max_attempts,
         job_timeout_seconds=experiment.job_timeout_seconds,
         max_tool_steps=experiment.max_tool_steps,
@@ -392,6 +483,43 @@ def get_experiment(experiment_id: UUID, session: SessionDependency) -> Experimen
             for execution, case in rows
         ],
     )
+
+
+@router.get(
+    "/experiments/{experiment_id}/summary",
+    response_model=ExperimentSummaryRead,
+)
+def get_experiment_summary(
+    experiment_id: UUID,
+    session: SessionDependency,
+) -> ExperimentSummaryRead:
+    try:
+        summary = analyze_experiment(session, experiment_id)
+    except ExperimentAnalysisNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Experiment not found") from exc
+    return ExperimentSummaryRead.model_validate(summary.as_dict())
+
+
+@router.get(
+    "/experiments/{baseline_experiment_id}/compare/{candidate_experiment_id}",
+    response_model=ExperimentComparisonRead,
+)
+def get_experiment_comparison(
+    baseline_experiment_id: UUID,
+    candidate_experiment_id: UUID,
+    session: SessionDependency,
+) -> ExperimentComparisonRead:
+    try:
+        comparison = compare_experiments(
+            session,
+            baseline_experiment_id,
+            candidate_experiment_id,
+        )
+    except ExperimentAnalysisNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Experiment not found") from exc
+    except ExperimentComparisonConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return ExperimentComparisonRead.model_validate(comparison.as_dict())
 
 
 def _execution_records(session: Session, case_execution_id: UUID) -> dict[str, Any]:

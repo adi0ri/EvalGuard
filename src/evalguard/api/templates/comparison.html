@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EvalGuard prompt comparison</title>
+    <style>
+      :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; color: #172033; background: #f4f7fb; }
+      main { max-width: 1180px; margin: 0 auto; padding: 2rem 1rem 4rem; }
+      h1, h2 { color: #0d1b36; }
+      h1 { margin-bottom: .35rem; }
+      .label { display: inline-block; padding: .35rem .65rem; border-radius: 999px;
+        color: #5b3600; background: #fff0c2; font-weight: 700; }
+      .notice { padding: .9rem; border-left: .3rem solid #4169a8; background: #eaf1ff; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: .85rem; margin: 1rem 0; }
+      .card { background: white; border: 1px solid #dce3ee; border-radius: .65rem; padding: 1rem; }
+      .metric { font-size: 1.65rem; font-weight: 750; }
+      .muted { color: #5d687b; }
+      code { overflow-wrap: anywhere; }
+      table { width: 100%; border-collapse: collapse; background: white; font-size: .92rem; }
+      th, td { padding: .65rem; border: 1px solid #dce3ee; text-align: left; vertical-align: top; }
+      th { background: #eaf0f8; }
+      a { color: #174ea6; }
+      .good { color: #166534; font-weight: 700; }
+      .pending { color: #8a4b08; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="label">Synthetic infrastructure validation—not model-quality evidence</span>
+      <h1>EvalGuard prompt comparison</h1>
+      <p class="muted">
+        Candidate deltas are candidate minus baseline. Token usage and cost are unavailable for
+        the deterministic fake and are never represented as zero.
+      </p>
+
+      {% if comparison.quality_comparison_ready %}
+        <p class="notice good">Both experiments are complete and fully graded.</p>
+      {% else %}
+        <p class="notice pending">Comparison is provisional; quality deltas remain unavailable
+          until both experiments complete with grader evidence for every execution.</p>
+      {% endif %}
+
+      <section class="grid">
+        {% for label, run in [('Baseline', comparison.baseline), ('Candidate', comparison.candidate)] %}
+          <article class="card">
+            <h2>{{ label }}</h2>
+            <p><strong>Experiment:</strong> <code>{{ run.experiment_id }}</code></p>
+            <p><strong>Prompt:</strong>
+              {% if run.prompt %}{{ run.prompt.name }}@{{ run.prompt.version }}{% else %}legacy-unversioned{% endif %}
+            </p>
+            {% if run.prompt %}<p><strong>Prompt hash:</strong> <code>{{ run.prompt.definition_hash }}</code></p>{% endif %}
+            <p><strong>Status:</strong> {{ run.status }}</p>
+            <p><strong>Raw executions:</strong> {{ run.execution_counts.expected }}</p>
+            <p><strong>Trials per case:</strong> {{ run.trials }}</p>
+          </article>
+        {% endfor %}
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <div class="muted">Baseline strict pass</div>
+          <div class="metric">{{ comparison.baseline.strict_pass_rate.numerator }}/{{ comparison.baseline.strict_pass_rate.denominator }}</div>
+        </article>
+        <article class="card">
+          <div class="muted">Candidate strict pass</div>
+          <div class="metric">{{ comparison.candidate.strict_pass_rate.numerator }}/{{ comparison.candidate.strict_pass_rate.denominator }}</div>
+        </article>
+        <article class="card">
+          <div class="muted">Strict-pass delta</div>
+          <div class="metric">{% if comparison.strict_pass_rate.delta is not none %}{{ '%+.1f%%'|format(comparison.strict_pass_rate.delta * 100) }}{% else %}n/a{% endif %}</div>
+        </article>
+        <article class="card">
+          <div class="muted">Mean run-duration delta</div>
+          <div class="metric">{% if comparison.mean_run_duration_ms.delta is not none %}{{ '%+d ms'|format(comparison.mean_run_duration_ms.delta) }}{% else %}n/a{% endif %}</div>
+        </article>
+      </section>
+
+      <h2>Grader families</h2>
+      <table>
+        <thead><tr><th>Family</th><th>Baseline</th><th>Candidate</th><th>Delta</th></tr></thead>
+        <tbody>
+          {% for row in comparison.grader_families %}
+            <tr>
+              <td>{{ row.grader_name }}</td>
+              <td>{{ row.baseline_pass_rate.numerator }}/{{ row.baseline_pass_rate.denominator }}</td>
+              <td>{{ row.candidate_pass_rate.numerator }}/{{ row.candidate_pass_rate.denominator }}</td>
+              <td>{% if row.pass_rate_delta is not none %}{{ '%+.1f%%'|format(row.pass_rate_delta * 100) }}{% else %}n/a{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h2>Case and raw trial results</h2>
+      <table>
+        <thead>
+          <tr><th>Case</th><th>Category</th><th>Baseline trials</th><th>Candidate trials</th><th>Outcome</th></tr>
+        </thead>
+        <tbody>
+          {% for row in report_rows %}
+            <tr>
+              <td>{{ row.comparison.case_key }}</td>
+              <td>{{ row.comparison.category }}</td>
+              <td>
+                {% for trial in row.baseline.trials %}
+                  <a href="/api/v1/executions/{{ trial.execution_id }}">trial {{ trial.trial_number }}</a>
+                  ({{ trial.status }}){% if not loop.last %}<br>{% endif %}
+                {% endfor %}
+              </td>
+              <td>
+                {% for trial in row.candidate.trials %}
+                  <a href="/api/v1/executions/{{ trial.execution_id }}">trial {{ trial.trial_number }}</a>
+                  ({{ trial.status }}){% if not loop.last %}<br>{% endif %}
+                {% endfor %}
+              </td>
+              <td>{{ row.comparison.classification }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h2>Method and limits</h2>
+      <p>
+        Both arms use suite <code>{{ comparison.baseline.suite_name }}@{{ comparison.baseline.suite_version }}</code>
+        with hash <code>{{ comparison.baseline.suite_definition_hash }}</code>, provider
+        <code>{{ comparison.baseline.provider }}</code>, and the same resilience policy and case/trial grid.
+        An execution passes only when it completed, has at least one grader result, and every persisted
+        criterion passed. Timing is synthetic infrastructure timing, not model latency. The fake provider
+        records prompt identity but follows the same source-controlled typed plan for both prompts, so this
+        report validates analysis plumbing and cannot establish that one prompt is better.
+      </p>
+    </main>
+  </body>
+</html>

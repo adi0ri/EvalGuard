@@ -1,11 +1,12 @@
 """Public request and response contracts for the EvalGuard API."""
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from evalguard.evaluation.prompts import DEFAULT_PROMPT_VERSION, PROMPT_NAME
 from evalguard.evaluation.resilience import FaultMode
 from evalguard.evaluation.suite import PHASE3_SUITE_NAME, PHASE3_SUITE_VERSION
 
@@ -18,6 +19,7 @@ class FaultInjectionCreate(ApiModel):
     """One deterministic execution fault, scoped to a selected case."""
 
     case_key: str = Field(min_length=1, max_length=100)
+    trial_number: int = Field(default=1, ge=1, le=3)
     mode: FaultMode
     fail_attempts: int = Field(default=1, ge=1, le=5)
 
@@ -25,13 +27,21 @@ class FaultInjectionCreate(ApiModel):
 class ExperimentCreate(ApiModel):
     suite_name: str = PHASE3_SUITE_NAME
     suite_version: str = PHASE3_SUITE_VERSION
+    prompt_name: str = PROMPT_NAME
+    prompt_version: str = DEFAULT_PROMPT_VERSION
     provider: Literal["deterministic-fake"] = "deterministic-fake"
-    trials: Literal[1] = 1
+    trials: int = Field(default=1, ge=1, le=3)
     max_attempts: int = Field(default=3, ge=1, le=5)
     job_timeout_seconds: int = Field(default=30, ge=1, le=300)
     max_tool_steps: int = Field(default=8, ge=1, le=100)
     retry_backoff_seconds: int = Field(default=1, ge=0, le=300)
     fault_injection: FaultInjectionCreate | None = None
+
+    @model_validator(mode="after")
+    def validate_fault_trial(self) -> Self:
+        if self.fault_injection is not None and self.fault_injection.trial_number > self.trials:
+            raise ValueError("fault_injection.trial_number must not exceed trials")
+        return self
 
 
 class SuiteSummary(ApiModel):
@@ -41,6 +51,15 @@ class SuiteSummary(ApiModel):
     description: str
     definition_hash: str
     case_count: int
+
+
+class AgentPromptSummary(ApiModel):
+    id: UUID
+    name: str
+    version: str
+    description: str
+    instructions: str
+    definition_hash: str
 
 
 class ExperimentAccepted(ApiModel):
@@ -58,14 +77,22 @@ class ExecutionBrief(ApiModel):
     attempt_count: int
 
 
+class PromptIdentityRead(ApiModel):
+    name: str
+    version: str
+    definition_hash: str
+
+
 class ExperimentDetail(ApiModel):
     id: UUID
     suite_id: UUID
     suite_name: str
     suite_version: str
+    prompt: PromptIdentityRead | None
     provider: str
     status: str
     idempotency_key: str | None
+    trials: int
     max_attempts: int
     job_timeout_seconds: int
     max_tool_steps: int
@@ -73,6 +100,184 @@ class ExperimentDetail(ApiModel):
     created_at: datetime
     completed_at: datetime | None
     executions: list[ExecutionBrief]
+
+
+class RatioRead(ApiModel):
+    numerator: int
+    denominator: int
+    value: float | None
+
+
+class ExecutionCountsRead(ApiModel):
+    expected: int
+    terminal: int
+    completed: int
+    infrastructure_failed: int
+    nonterminal: int
+    graded: int
+    passing: int
+    criterion_failing: int
+    ungraded_terminal: int
+
+
+class DurationMetricRead(ApiModel):
+    observed_count: int
+    minimum_ms: int | None
+    mean_ms: int | None
+    median_ms: int | None
+    p95_ms: int | None
+    maximum_ms: int | None
+
+
+class TimingAnalysisRead(ApiModel):
+    label: str
+    queue_delay: DurationMetricRead
+    run_duration: DurationMetricRead
+    end_to_end_duration: DurationMetricRead
+
+
+class TrialAnalysisRead(ApiModel):
+    execution_id: UUID
+    trial_number: int
+    status: str
+    attempt_count: int
+    quality_passed: bool | None
+    grader_criteria: int
+    passed_criteria: int
+    queue_delay_ms: int | None
+    run_duration_ms: int | None
+    end_to_end_duration_ms: int | None
+
+
+class CaseAnalysisRead(ApiModel):
+    case_id: UUID
+    case_key: str
+    category: str
+    expected_trials: int
+    terminal_trials: int
+    graded_trials: int
+    passing_trials: int
+    strict_pass_rate: RatioRead
+    stability: Literal["stable_pass", "stable_fail", "unstable", "incomplete"]
+    trials: list[TrialAnalysisRead]
+
+
+class GraderFamilyAnalysisRead(ApiModel):
+    grader_name: str
+    passed_criteria: int
+    total_criteria: int
+    pass_rate: RatioRead
+
+
+class CriterionAnalysisRead(ApiModel):
+    grader_name: str
+    criterion: str
+    passed: int
+    total: int
+    pass_rate: RatioRead
+
+
+class CategoryAnalysisRead(ApiModel):
+    category: str
+    expected_executions: int
+    terminal_executions: int
+    graded_executions: int
+    passing_executions: int
+    strict_pass_rate: RatioRead
+    grading_coverage: RatioRead
+
+
+class StabilityCountsRead(ApiModel):
+    stable_pass: int
+    stable_fail: int
+    unstable: int
+    incomplete: int
+
+
+class GridIntegrityRead(ApiModel):
+    expected_coordinates: int
+    observed_executions: int
+    missing_coordinates: int
+    unexpected_coordinates: int
+    duplicate_coordinates: int
+    valid: bool
+
+
+class ExperimentSummaryRead(ApiModel):
+    experiment_id: UUID
+    status: str
+    suite_id: UUID
+    suite_name: str
+    suite_version: str
+    suite_definition_hash: str
+    prompt: PromptIdentityRead | None
+    prompt_is_published: bool | None
+    provider: str
+    trials: int
+    max_attempts: int
+    job_timeout_seconds: int
+    max_tool_steps: int
+    retry_backoff_seconds: int
+    created_at: datetime
+    completed_at: datetime | None
+    result_label: str
+    is_terminal: bool
+    is_fully_graded: bool
+    quality_comparison_ready: bool
+    token_usage_available: bool
+    cost_available: bool
+    fault_injection_present: bool
+    grid_integrity: GridIntegrityRead
+    execution_counts: ExecutionCountsRead
+    status_counts: dict[str, int]
+    strict_pass_rate: RatioRead
+    graded_pass_rate: RatioRead
+    grading_coverage: RatioRead
+    criterion_pass_rate: RatioRead
+    total_attempts: int
+    retry_attempts: int
+    stability_counts: StabilityCountsRead
+    stable_case_rate: RatioRead
+    timing: TimingAnalysisRead
+    grader_families: list[GraderFamilyAnalysisRead]
+    criteria: list[CriterionAnalysisRead]
+    categories: list[CategoryAnalysisRead]
+    cases: list[CaseAnalysisRead]
+
+
+class ValueDeltaRead(ApiModel):
+    baseline: float | int | None
+    candidate: float | int | None
+    delta: float | int | None
+
+
+class CaseComparisonRead(ApiModel):
+    case_key: str
+    category: str
+    baseline_pass_rate: RatioRead
+    candidate_pass_rate: RatioRead
+    pass_rate_delta: float | None
+    classification: Literal["improved", "regressed", "unchanged", "provisional"]
+
+
+class GraderFamilyComparisonRead(ApiModel):
+    grader_name: str
+    baseline_pass_rate: RatioRead
+    candidate_pass_rate: RatioRead
+    pass_rate_delta: float | None
+
+
+class ExperimentComparisonRead(ApiModel):
+    baseline: ExperimentSummaryRead
+    candidate: ExperimentSummaryRead
+    quality_comparison_ready: bool
+    strict_pass_rate: ValueDeltaRead
+    criterion_pass_rate: ValueDeltaRead
+    stable_case_rate: ValueDeltaRead
+    mean_run_duration_ms: ValueDeltaRead
+    total_attempts: ValueDeltaRead
+    grader_families: list[GraderFamilyComparisonRead]
+    cases: list[CaseComparisonRead]
 
 
 class TraceEventRead(ApiModel):

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from evalguard.core.config import get_settings
 from evalguard.db.models import (
+    AgentPrompt,
     CaseExecution,
     Customer,
     EvaluationCase,
@@ -43,6 +44,7 @@ from evalguard.evaluation.grader import (
     grade_scenario,
 )
 from evalguard.evaluation.lifecycle import reconcile_experiment_status
+from evalguard.evaluation.prompts import AgentPromptDefinition, validate_agent_prompt
 from evalguard.evaluation.scenarios import PHASE3_SCENARIOS, ScenarioDefinition
 from evalguard.evaluation.suite import PHASE3_CASE_DEFINITION_HASHES
 from evalguard.providers.fake import DeterministicFakeProvider
@@ -468,6 +470,15 @@ def execute_case(
         fail_attempts=fault_plan.fail_attempts if fault_plan is not None else 0,
         timeout_seconds=experiment.job_timeout_seconds,
     )
+    agent_prompt: AgentPromptDefinition | None = None
+    if experiment.agent_prompt_id is not None:
+        prompt_row = session.get(AgentPrompt, experiment.agent_prompt_id)
+        if prompt_row is None:
+            raise UnsupportedCaseDefinitionError("Experiment agent prompt is missing")
+        try:
+            agent_prompt = validate_agent_prompt(prompt_row)
+        except RuntimeError as exc:
+            raise UnsupportedCaseDefinitionError(str(exc)) from exc
 
     if "category" in case.expected:
         definition = _scenario_definition(case)
@@ -479,7 +490,11 @@ def execute_case(
             actor_customer_external_id=fixture.requester_customer_id,
             max_tool_steps=experiment.max_tool_steps,
         )
-        resolution = selected_provider.run_scenario(definition=definition, tools=runtime)
+        resolution = selected_provider.run_scenario(
+            definition=definition,
+            tools=runtime,
+            agent_prompt=agent_prompt,
+        )
         execution.final_resolution = resolution
         session.flush()
         outcomes = grade_scenario(
@@ -503,6 +518,7 @@ def execute_case(
             expected_order_id=legacy_expectation.order_id,
             expected_amount_cents=legacy_expectation.refund_amount_cents,
             tools=runtime,
+            agent_prompt=agent_prompt,
         )
         execution.final_resolution = resolution
         session.flush()

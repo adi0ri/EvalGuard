@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from evalguard.api.health import router as health_router
+from evalguard.api.reports import router as report_router
 from evalguard.api.routes import router as api_router
 from evalguard.core.config import get_settings
 from evalguard.core.logging import configure_logging
@@ -27,6 +28,7 @@ def create_app() -> FastAPI:
     )
     application.include_router(health_router)
     application.include_router(api_router)
+    application.include_router(report_router)
     return application
 
 
