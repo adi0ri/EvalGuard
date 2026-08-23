@@ -176,8 +176,8 @@ invocations, 164 trace events including one `tool_replay`, 7 refunds, and 5 supp
 tickets. The Redis-unavailable probe kept liveness at `200`, changed readiness to
 `503`, and returned readiness to `200` after restoration. These are synthetic
 infrastructure results, not real-model quality measurements. Phase 3 commits
-`083808c` and `6655e79` are pushed; local `main` and `origin/main` are at `6655e79`.
-No Phase 3 remote-CI result is claimed.
+`083808c` and `6655e79` are pushed; `origin/main` remains at `6655e79`. No Phase 3
+remote-CI result is claimed.
 
 Phase 4 fault injection remains inside that deterministic fake path. One optional
 execution-scoped plan may inject a typed transient pre-provider failure, transient
@@ -193,9 +193,11 @@ criteria, 44 tool calls, 7 refunds, and 5 tickets. Separate synthetic v1 checks
 proved typed transient recovery, a real RQ-enforced timeout, actual worker-SIGKILL
 recovery, and accepted-work recovery across a Redis outage. The revision `0007`
 migration round trip and Compose topology also passed. These are operational
-infrastructure results, not real-provider reliability. No Phase 4 commit, push, or
-remote-CI result is claimed; the local commit is pending and publication requires
-explicit user approval.
+infrastructure results, not real-provider reliability. The runtime evidence was
+recorded before repository closure. Local implementation commit
+`e276ba5` now records verified Phase 4; local `main` remains ahead of `origin/main`
+at `6655e79`. Phase 4 remains unpushed, no remote CI is claimed, and
+publication requires explicit user approval.
 
 The final count increased by three independently authored PostgreSQL regressions:
 two parametrized cases prove missing/terminal exact deliveries for migrated legacy
@@ -269,6 +271,8 @@ remains a Phase 5 target until generated and verified.
   against the final commands recorded in `PROGRESS.md`.
 - [x] Complete the final Phase 4 dependency, provenance, secret, credential,
   proprietary-material, and result-label audit.
-- [x] Record the successful Phase 3 push: commits `083808c` and `6655e79`; local
-  `main` and `origin/main` at `6655e79`.
+- [x] Record the successful Phase 3 push: commits `083808c` and `6655e79`; both
+  refs were at `6655e79` at that checkpoint.
+- [x] Record verified Phase 4 implementation commit `e276ba5`; local `main` ahead
+  of `origin/main` at `6655e79`; Phase 4 unpushed with no remote CI.
 - [ ] Record any observed Phase 3 remote-CI result if it occurs; none is claimed.

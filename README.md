@@ -10,9 +10,10 @@ retries and RQ timeouts, exact tool-step enforcement, worker recovery, and typed
 development/test fault plans. Phase 4 local acceptance is complete: all 189 tests,
 the revision `0007` round trip, Compose startup, deterministic live flows, a real
 RQ timeout, an actual worker SIGKILL, and Redis-outage recovery passed. Its local
-commit is pending and it remains unpushed. The recorded Phase 3 automated suite and
-live 25-case runtime smoke also pass. Phase 3 commits `083808c` and `6655e79` are
-pushed; local `main` and `origin/main` are at
+implementation commit is `e276ba5`; local `main` remains ahead of `origin/main` at
+`6655e79`, and Phase 4 remains unpushed with no remote-CI result
+claimed. The recorded Phase 3 automated suite and live 25-case runtime smoke also
+pass. Phase 3 commits `083808c` and `6655e79` are pushed; `origin/main` remains at
 `6655e79`. No Phase 3 remote-CI result is claimed.
 
 The recorded deterministic-fake results are **synthetic infrastructure
@@ -343,8 +344,9 @@ tool calls, 7 refunds, and 5 tickets. Same-key replay kept the same experiment a
 25 attempts. Separate v1 runs proved transient recovery, a real one-second RQ
 timeout, actual worker-SIGKILL recovery, and automatic recovery of a `202`-accepted
 pending outbox after Redis restoration, each without a duplicate refund. These are
-synthetic infrastructure checks. No Phase 4 commit, push, or remote-CI result is
-claimed; the local commit is pending and publication requires explicit approval.
+synthetic infrastructure checks. Implementation commit `e276ba5` records verified
+Phase 4. It remains unpushed and no remote-CI result is claimed; publication
+requires explicit approval.
 
 ## API implemented through Phase 4
 
@@ -369,7 +371,7 @@ converge. The API's initial-work override applies only to queued/legacy
 
 ## Planned, not implemented
 
-Phase 5 compares experiments and adds a small server-rendered report. A
+Phase 5 has not started. It compares experiments and adds a small server-rendered report. A
 real-provider adapter is optional Phase 6 work and requires explicit approval for
 credentials and possible spending.
 

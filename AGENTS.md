@@ -24,8 +24,8 @@ ParcelDesk support domain.
   `20260822_0006` enforces that each ticket customer owns its order. Locked
   installation, static checks, clean migration round trip, Compose startup, the
   live 25-case smoke, and the Redis-unavailable readiness probe all passed. Phase 3
-  commits `083808c` and `6655e79` are pushed; local `main` and `origin/main` are at
-  `6655e79`. No Phase 3 remote-CI result is claimed.
+  commits `083808c` and `6655e79` are pushed; `origin/main` remains at `6655e79`.
+  No Phase 3 remote-CI result is claimed.
 - Phase 4 implementation and local acceptance are complete. Revision
   `20260822_0007` adds durable dispatch, execution
   attempt, lease, retry-policy, and development/test fault-plan state. The API now
@@ -37,10 +37,12 @@ ParcelDesk support domain.
   or legacy `enqueue_failed` work. The final 189-test run, migration round trip,
   Compose startup, deterministic live flows, real RQ timeout, actual worker
   interruption, and Redis-outage recovery are recorded in `PROGRESS.md`. Phase 4
-  has no commit or push yet; keep it unpushed until the user explicitly requests
-  publication, and claim no remote CI without observing it.
+  implementation commit `e276ba5` records the verified milestone. Local `main`
+  remains ahead of `origin/main` at `6655e79`; Phase 4 remains unpushed and no
+  remote CI is claimed.
 - Do not begin Phase 5 or later work unless the user explicitly advances the
-  milestone. Record later ideas in `PLAN.md` instead.
+  milestone. Phase 5 has not started; wait for explicit direction before either a
+  Phase 4 push or Phase 5 work, and record later ideas in `PLAN.md` instead.
 
 ## Engineering rules
 

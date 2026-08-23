@@ -12,13 +12,14 @@ content: published `parceldesk-refunds@1.0.0` and `@2.0.0` and their hashes rema
 unchanged. All local acceptance checkboxes below are verified from exact evidence
 in `PROGRESS.md`: 189 tests passed, revision `0007` completed its migration/backfill
 round trip, and Compose/live timeout/interruption/outage recovery passed. A local
-Phase 4 commit is pending; nothing from Phase 4 is pushed and no remote-CI result is
-claimed. Phase 5 and later remain out of scope and have not started.
+implementation commit `e276ba5` records verified Phase 4. Local `main` remains
+ahead of `origin/main` at `6655e79`; Phase 4 remains unpushed and no remote-
+CI result is claimed. Phase 5 and later remain out of scope and have not started.
 
 Phase 3 remains complete locally with its recorded 158-test, migration, Compose,
 live-smoke, and readiness evidence. Commits `083808c` and `6655e79` are pushed;
-local `main` and `origin/main` are at `6655e79`. No Phase 3 remote-CI result is
-claimed; it is not a Phase 3 local-acceptance prerequisite.
+`origin/main` remains at `6655e79`. No Phase 3 remote-CI result is claimed; it is
+not a Phase 3 local-acceptance prerequisite.
 
 ## Phase 0 — repository and architecture foundation
 
@@ -413,8 +414,8 @@ queued deterministic breadth without mutating that historical definition.
   deterministic-fake submission/retrieval through Phase 4 evidence, and repeat
   dependency readiness behavior where required.
 - [x] Complete the Phase 4 durable-document, provenance, dependency/reference,
-  secret, and proprietary-material audit. Record that the local commit is pending,
-  Phase 4 remains unpushed, and no remote CI is claimed.
+  secret, and proprietary-material audit. Record implementation commit `e276ba5`,
+  Phase 4's unpushed status, and that no remote CI is claimed.
 
 ## Backlog — do not implement during the current milestone
 
@@ -455,13 +456,13 @@ No Phase 0–4 local-acceptance blocker is known. One
 upstream FastAPI/Starlette `TestClient` deprecation warning is recorded in
 `PROGRESS.md`; the final Phase 4 suite passes all 189 tests. Phase 2 is pushed at
 `26c3e86` at the Phase 2 close. Phase 3 commits `083808c` and `6655e79` are pushed,
-and local `main` plus `origin/main` are at `6655e79`; no Phase 3 remote-CI result is
-claimed. Phase 4 implementation and final-acceptance criteria are checked above
-from the exact local evidence in `PROGRESS.md`; its local commit remains pending,
-it is unpushed, and no Phase 4 remote-CI result is claimed.
+and `origin/main` remains at `6655e79`; no Phase 3 remote-CI result is claimed.
+Phase 4 implementation and final-acceptance criteria are checked above
+from the exact local evidence in `PROGRESS.md`. Implementation commit `e276ba5`
+records that verified milestone; local `main` remains ahead of `origin/main` at
+`6655e79`, Phase 4 is unpushed, and no Phase 4 remote-CI result is claimed.
 
 ## Precise next action
 
-Record the pending local Phase 4 commit when it occurs, then keep Phase 4 unpushed
-until the user explicitly asks to publish. Record remote CI only if actually
-observed, and do not begin Phase 5 until the user explicitly advances it.
+Wait for explicit user direction before pushing Phase 4 or starting Phase 5.
+Record remote CI only if actually observed.

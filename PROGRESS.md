@@ -682,3 +682,15 @@ remain unpushed until the user explicitly requests publication.
 Phase 5 comparison/reporting remains out of scope and has not started. The precise
 next action is to record the pending local Phase 4 commit when it occurs, then wait
 for explicit user direction before any push or Phase 5 work.
+
+## Phase 4 local implementation commit checkpoint — 2026-08-22
+
+After the pending-commit checkpoint above, Git author identity remained configured
+and local commit `e276ba5` (`feat: complete EvalGuard Phase 4`) recorded the verified
+Phase 4 implementation. Local `main` is one commit ahead of `origin/main`, which
+remains at Phase 3 documentation commit `6655e79`. Phase 4 is unpushed and no
+remote-CI result is claimed.
+
+Phase 5 has not started. The next action is to wait for explicit user direction
+before either pushing Phase 4 or beginning Phase 5. No subsequent documentation
+commit hash is claimed here.

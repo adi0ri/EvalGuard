@@ -2,11 +2,12 @@
 
 These notes explain the architecture in interview-ready language. Phase 0–4 result
 counts below come from recorded automated and live synthetic evidence. Phase
-3 commits `083808c` and `6655e79` are pushed; local `main` and `origin/main` are at
-`6655e79`. No Phase 3 remote-CI result is claimed. Phase 4 resilience behavior and
-local acceptance are complete; its local commit is pending, it remains unpushed,
-and no remote-CI result is claimed. Phase 5 analysis/reporting and Phase 6 real-
-provider work remain future scope and have not started.
+3 commits `083808c` and `6655e79` are pushed; `origin/main` remains at `6655e79`.
+No Phase 3 remote-CI result is claimed. Phase 4 resilience behavior and
+local acceptance are complete, and implementation commit `e276ba5` records that
+verified state. Local `main` remains ahead of `origin/main` at `6655e79`;
+Phase 4 remains unpushed and no remote-CI result is claimed. Phase 5 analysis/
+reporting and Phase 6 real-provider work remain future scope and have not started.
 
 ## Implemented concepts through Phase 4
 

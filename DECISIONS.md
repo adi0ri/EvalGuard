@@ -583,9 +583,13 @@ Fault plans, retry policy, attempts, dispatches, and leases are operational stat
 they do not change `parceldesk-refunds@1.0.0`, `@2.0.0`, any case/fake plan/grader
 definition, or the verified hashes. Their deterministic-fake output remains
 synthetic infrastructure validation. Phase 5 comparison/reporting and Phase 6 real
-provider work remain outside this decision.
+provider work remain outside this decision; Phase 5 has not started.
 
 The final Phase 4 suite and live checks verified exact N/N+1 accounting,
 post-tool rollback before retry, single-case fault isolation in the 25-case suite,
 and production-environment fault-plan rejection. Those results validate this
 operational decision without adding a grader family or changing either suite hash.
+
+Local implementation commit `e276ba5` records the verified Phase 4 decisions.
+Local `main` remains ahead of `origin/main` at `6655e79`; the milestone
+remains unpushed and no remote-CI result is claimed.

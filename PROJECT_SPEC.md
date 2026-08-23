@@ -6,14 +6,16 @@ Phase 0, Phase 1, and Phase 2 are complete. Phase 3 implementation and local
 acceptance are complete: 158 tests, locked installation, static checks, the clean
 `20260822_0006` migration round trip, Compose startup, a live 25-case smoke, and a
 Redis-unavailable readiness probe passed. Phase 3 commits `083808c` and `6655e79`
-are pushed; local `main` and `origin/main` are at `6655e79`. No Phase 3 remote-CI
-result is claimed. Phase 4
+are pushed; `origin/main` remains at `6655e79`. No Phase 3 remote-CI result is
+claimed. Phase 4
 resilience implementation and local acceptance are complete, including revision
 `20260822_0007`, 189 passing tests, its migration/backfill round trip, Compose and
 live recovery checks, a real RQ timeout, an actual worker interruption, and Redis-
-outage recovery. No Phase 4 commit, push, or remote-CI result is claimed. This
-specification defines the implemented Phase 4 behavior and remaining V1 contract.
-Phase 5 and later requirements remain out of scope until explicitly advanced.
+outage recovery. Local implementation commit `e276ba5` records verified Phase 4;
+local `main` remains ahead of `origin/main` at `6655e79`. Phase 4 remains
+unpushed and no remote-CI result is claimed. This specification defines the
+implemented Phase 4 behavior and remaining V1 contract. Phase 5 has not started and
+later requirements remain out of scope until explicitly advanced.
 
 ## Product outcome
 
@@ -573,7 +575,8 @@ recovery; bounded transient/permanent/timeout/step-limit behavior; rollback/idem
 isolation; fresh and expired lease behavior; the worker interruption path; API and
 pre-claim missing/unrunnable delivery recovery; retrieval contracts; Compose
 startup; and a documented recovery pass. `PROGRESS.md` records the exact local
-results. Commit, push, and remote CI remain separate, unclaimed events.
+results. Implementation commit `e276ba5` records that verified state; push and
+remote CI remain separate, unclaimed events.
 
 ## Full V1 definition of done
 
