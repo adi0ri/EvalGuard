@@ -1,5 +1,6 @@
-"""Typed contracts for the ParcelDesk tools implemented through Phase 2."""
+"""Typed contracts for the ParcelDesk tools implemented through Phase 6."""
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +28,7 @@ class LookupOrderResult(ToolResult):
     status: str
     total_cents: int
     currency: str
+    delivered_at: datetime | None = None
 
 
 class IssueRefundArgs(ToolArguments):

@@ -21,6 +21,7 @@ from evalguard.db.models import (
     ToolInvocation,
     TraceEvent,
 )
+from evalguard.evaluation.executor import UnsupportedProviderError
 from evalguard.workers.dispatch import create_dispatch, reconcile_pending_dispatches
 from evalguard.workers.jobs import run_case_execution
 from evalguard.workers.queue import job_id_for_execution
@@ -170,14 +171,15 @@ def test_failed_job_records_durable_terminal_state_and_trace(
     execution_factory: Callable[..., UUID],
     redis_connection: Redis,
     rq_queue: Queue,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     execution_id = execution_factory(materialize_state=False)
+
+    def fail_execution(*args: object, **kwargs: object) -> None:
+        raise UnsupportedProviderError("unsupported-provider")
+
+    monkeypatch.setattr("evalguard.workers.jobs.execute_case", fail_execution)
     with session_factory.begin() as session:
-        execution = session.get(CaseExecution, execution_id)
-        assert execution is not None
-        experiment = session.get(Experiment, execution.experiment_id)
-        assert experiment is not None
-        experiment.provider = "unsupported-provider"
         create_dispatch(session, execution_id, generation=1)
 
     dispatched = reconcile_pending_dispatches(

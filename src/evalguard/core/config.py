@@ -1,7 +1,10 @@
 """Environment-driven application configuration."""
 
+from decimal import Decimal
 from functools import lru_cache
+from typing import Literal
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +29,18 @@ class Settings(BaseSettings):
     )
     test_redis_url: str = "redis://localhost:6379/15"
     test_queue_name: str = "evalguard-tests"
+    real_provider_enabled: bool = False
+    openai_api_key: SecretStr | None = None
+    openai_model: str = "gpt-5.6-luna"
+    openai_reasoning_effort: Literal["none", "low"] = "none"
+    openai_max_output_tokens: int = Field(default=1200, ge=256, le=4000)
+    openai_max_turns: int = Field(default=6, ge=1, le=8)
+    openai_request_timeout_seconds: float = Field(default=45.0, gt=0, le=120)
+    openai_max_experiment_cost_usd: Decimal = Field(
+        default=Decimal("5.00"),
+        gt=0,
+        le=Decimal("5.00"),
+    )
 
 
 @lru_cache

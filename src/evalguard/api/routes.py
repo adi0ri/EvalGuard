@@ -27,6 +27,7 @@ from evalguard.api.schemas import (
     GraderResultRead,
     OrderRead,
     PromptIdentityRead,
+    ProviderTurnRead,
     RefundRead,
     ShippingAddressRead,
     SuiteSummary,
@@ -47,6 +48,7 @@ from evalguard.db.models import (
     Experiment,
     GraderResult,
     Order,
+    ProviderTurn,
     Refund,
     SupportTicket,
     ToolInvocation,
@@ -59,6 +61,11 @@ from evalguard.evaluation.analysis import (
     analyze_experiment,
     compare_experiments,
 )
+from evalguard.providers.configuration import (
+    OPENAI_PROVIDER,
+    build_openai_provider_config,
+    provider_config_hash,
+)
 from evalguard.workers.dispatch import create_dispatch, reconcile_pending_dispatches
 
 logger = logging.getLogger(__name__)
@@ -70,6 +77,11 @@ def _idempotency_advisory_lock_id(idempotency_key: str) -> int:
     """Map an opaque request key to PostgreSQL's signed 64-bit lock namespace."""
     digest = hashlib.sha256(f"evalguard:experiment:{idempotency_key}".encode()).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
+REAL_PROVIDER_RUN_LOCK_ID = _idempotency_advisory_lock_id(
+    "evalguard:single-authorized-real-provider-run"
+)
 
 
 @contextmanager
@@ -190,6 +202,13 @@ def _request_matches_experiment(
     agent_prompt_id: UUID,
     payload: ExperimentCreate,
 ) -> bool:
+    current_provider_config = None
+    current_provider_config_hash = None
+    current_provider_model = None
+    if payload.provider == OPENAI_PROVIDER:
+        current_provider_config = build_openai_provider_config(get_settings())
+        current_provider_config_hash = provider_config_hash(current_provider_config)
+        current_provider_model = str(current_provider_config["model"])
     requested_fault = payload.fault_injection
     fault_intent = _fault_intent(session, experiment.id)
     expected_fault = (
@@ -216,6 +235,9 @@ def _request_matches_experiment(
         experiment.suite_id == suite_id
         and prompt_matches
         and experiment.provider == payload.provider
+        and experiment.provider_model == current_provider_model
+        and experiment.provider_config == current_provider_config
+        and experiment.provider_config_hash == current_provider_config_hash
         and experiment.trials == payload.trials
         and experiment.max_attempts == payload.max_attempts
         and experiment.job_timeout_seconds == payload.job_timeout_seconds
@@ -319,6 +341,28 @@ def _create_experiment(
     )
     if not cases:
         raise HTTPException(status_code=409, detail="Evaluation suite has no cases")
+    provider_model = None
+    provider_config = None
+    provider_configuration_hash = None
+    if payload.provider == OPENAI_PROVIDER:
+        session.execute(select(func.pg_advisory_xact_lock(REAL_PROVIDER_RUN_LOCK_ID)))
+        settings = get_settings()
+        if not settings.real_provider_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="The bounded real-provider track is disabled",
+            )
+        if len(cases) > 25:
+            raise HTTPException(
+                status_code=422,
+                detail="openai-responses experiments are limited to 25 cases",
+            )
+        try:
+            provider_config = build_openai_provider_config(settings)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        provider_model = str(provider_config["model"])
+        provider_configuration_hash = provider_config_hash(provider_config)
     case_keys = {case.key for case in cases}
     requested_fault = payload.fault_injection
     if requested_fault is not None:
@@ -352,10 +396,23 @@ def _create_experiment(
             response.headers["Location"] = f"/api/v1/experiments/{existing.id}"
             return _accepted(session, existing)
 
+    if payload.provider == OPENAI_PROVIDER:
+        existing_real_run = session.scalar(
+            select(Experiment.id).where(Experiment.provider == OPENAI_PROVIDER).limit(1)
+        )
+        if existing_real_run is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="The single authorized real-provider experiment already exists",
+            )
+
     experiment = Experiment(
         suite_id=suite.id,
         agent_prompt_id=agent_prompt.id,
         provider=payload.provider,
+        provider_model=provider_model,
+        provider_config=provider_config,
+        provider_config_hash=provider_configuration_hash,
         status="queued",
         idempotency_key=idempotency_key,
         trials=payload.trials,
@@ -415,6 +472,11 @@ def create_experiment(
         Header(alias="Idempotency-Key", min_length=1, max_length=255),
     ] = None,
 ) -> ExperimentAccepted:
+    if payload.provider == OPENAI_PROVIDER and idempotency_key is None:
+        raise HTTPException(
+            status_code=422,
+            detail="openai-responses experiments require an Idempotency-Key",
+        )
     if idempotency_key is None:
         accepted = _create_experiment(payload, response, session, idempotency_key)
     else:
@@ -462,6 +524,8 @@ def get_experiment(experiment_id: UUID, session: SessionDependency) -> Experimen
             )
         ),
         provider=experiment.provider,
+        provider_model=experiment.provider_model,
+        provider_config_hash=experiment.provider_config_hash,
         status=experiment.status,
         idempotency_key=experiment.idempotency_key,
         trials=experiment.trials,
@@ -554,6 +618,11 @@ def _execution_records(session: Session, case_execution_id: UUID) -> dict[str, A
             .where(ExecutionDispatch.case_execution_id == case_execution_id)
             .order_by(ExecutionDispatch.generation)
         ).all(),
+        "provider_turns": session.scalars(
+            select(ProviderTurn)
+            .where(ProviderTurn.case_execution_id == case_execution_id)
+            .order_by(ProviderTurn.sequence_number)
+        ).all(),
         "trace_events": session.scalars(
             select(TraceEvent)
             .where(TraceEvent.case_execution_id == case_execution_id)
@@ -590,6 +659,9 @@ def get_execution(execution_id: UUID, session: SessionDependency) -> ExecutionDe
         experiment_id=execution.experiment_id,
         case_id=execution.case_id,
         case_key=case.key,
+        provider=experiment.provider,
+        provider_model=experiment.provider_model,
+        provider_config_hash=experiment.provider_config_hash,
         trial_number=execution.trial_number,
         status=execution.status,
         attempt_count=execution.attempt_count,
@@ -659,6 +731,7 @@ def get_execution(execution_id: UUID, session: SessionDependency) -> ExecutionDe
                 failure_kind=row.failure_kind,
                 error_message=row.error_message,
                 step_count=row.step_count,
+                recovery_count=row.recovery_count,
                 started_at=row.started_at,
                 lease_expires_at=row.lease_expires_at,
                 completed_at=row.completed_at,
@@ -668,6 +741,8 @@ def get_execution(execution_id: UUID, session: SessionDependency) -> ExecutionDe
         dispatches=[
             ExecutionDispatchRead(
                 generation=row.generation,
+                delivery_kind=row.delivery_kind,
+                attempt_number=row.attempt_number,
                 job_id=row.job_id,
                 status=row.status,
                 attempt_count=row.attempt_count,
@@ -677,6 +752,39 @@ def get_execution(execution_id: UUID, session: SessionDependency) -> ExecutionDe
                 last_error_kind=row.last_error_kind,
             )
             for row in records["dispatches"]
+        ],
+        provider_turns=[
+            ProviderTurnRead(
+                sequence_number=row.sequence_number,
+                attempt_number=row.attempt_number,
+                dispatch_generation=row.dispatch_generation,
+                status=row.status,
+                client_request_id=row.client_request_id,
+                request_hash=row.request_hash,
+                request_payload=row.request_payload,
+                provider_request_id=row.provider_request_id,
+                provider_response_id=row.provider_response_id,
+                response_model=row.response_model,
+                response_payload=row.response_payload,
+                tool_calls=row.tool_calls,
+                tool_outputs=row.tool_outputs,
+                input_tokens=row.input_tokens,
+                cached_input_tokens=row.cached_input_tokens,
+                output_tokens=row.output_tokens,
+                reasoning_tokens=row.reasoning_tokens,
+                total_tokens=row.total_tokens,
+                estimated_cost_usd_micros=row.estimated_cost_usd_micros,
+                latency_ms=row.latency_ms,
+                retryable=row.retryable,
+                error_kind=row.error_kind,
+                safe_error_message=row.safe_error_message,
+                prepared_at=row.prepared_at,
+                request_started_at=row.request_started_at,
+                response_received_at=row.response_received_at,
+                tools_completed_at=row.tools_completed_at,
+                completed_at=row.completed_at,
+            )
+            for row in records["provider_turns"]
         ],
         trace_events=[
             TraceEventRead(

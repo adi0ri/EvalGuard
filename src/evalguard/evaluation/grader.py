@@ -178,6 +178,7 @@ class ScenarioEvidence:
     trace_events: tuple[TraceSnapshot, ...]
     final_resolution: dict[str, Any] | None
     category: ScenarioCategory | None = None
+    provider_neutral: bool = False
 
 
 def _result(
@@ -247,7 +248,7 @@ def _state_results(evidence: ScenarioEvidence) -> tuple[CriterionResult, ...]:
             row.order_id,
             expected_owner_by_order[row.order_id],
             row.reason_code,
-            row.reason,
+            *(() if evidence.provider_neutral else (row.reason,)),
             row.priority,
             row.status,
         )
@@ -258,7 +259,7 @@ def _state_results(evidence: ScenarioEvidence) -> tuple[CriterionResult, ...]:
             row.order_id,
             row.customer_id,
             row.reason_code,
-            row.reason,
+            *(() if evidence.provider_neutral else (row.reason,)),
             row.priority,
             row.status,
         )
@@ -343,21 +344,52 @@ def _trace_results(evidence: ScenarioEvidence) -> tuple[CriterionResult, ...]:
     )
 
     expected_invocations = evidence.expectation.tool_invocations
-    expected_order = [(row.tool_call_id, row.tool_name) for row in expected_invocations]
-    actual_order = [(row.tool_call_id, row.tool_name) for row in evidence.invocations]
+    if evidence.provider_neutral and evidence.category == "duplicate_timeout_recovery":
+        # These published cases contain fake-provider fault choreography. A real
+        # model is graded on the minimal correct semantic path: omit injected
+        # failures and do not repeat an already successful mutation.
+        expected_invocations = tuple(
+            row
+            for row in expected_invocations
+            if row.status != "failed" and row.duplicate is not True
+        )
+    if evidence.provider_neutral:
+        expected_order: list[Any] = [row.tool_name for row in expected_invocations]
+        actual_order: list[Any] = [row.tool_name for row in evidence.invocations]
+    else:
+        expected_order = [(row.tool_call_id, row.tool_name) for row in expected_invocations]
+        actual_order = [(row.tool_call_id, row.tool_name) for row in evidence.invocations]
     required_order = expected_order == actual_order
 
     argument_checks: list[dict[str, Any]] = []
     outcome_checks: list[dict[str, Any]] = []
-    for expected in expected_invocations:
-        actual = invocation_by_id.get(expected.tool_call_id)
+    for index, expected in enumerate(expected_invocations):
+        actual = (
+            evidence.invocations[index]
+            if evidence.provider_neutral and index < len(evidence.invocations)
+            else invocation_by_id.get(expected.tool_call_id)
+        )
         expected_arguments = expected.arguments.model_dump(mode="json")
+        actual_arguments = actual.arguments if actual is not None else None
+        comparable_expected = dict(expected_arguments)
+        comparable_actual = None if actual_arguments is None else dict(actual_arguments)
+        if evidence.provider_neutral and expected.tool_name in {
+            "issue_refund",
+            "escalate_ticket",
+        }:
+            comparable_expected.pop("reason", None)
+            if comparable_actual is not None:
+                comparable_actual.pop("reason", None)
         argument_checks.append(
             {
                 "tool_call_id": expected.tool_call_id,
                 "expected": expected_arguments,
-                "actual": actual.arguments if actual is not None else None,
-                "passed": actual is not None and actual.arguments == expected_arguments,
+                "actual": actual_arguments,
+                "passed": (
+                    actual is not None
+                    and actual.tool_name == expected.tool_name
+                    and comparable_actual == comparable_expected
+                ),
             }
         )
         actual_error = None
@@ -390,16 +422,23 @@ def _trace_results(evidence: ScenarioEvidence) -> tuple[CriterionResult, ...]:
     outcomes_match_expectation = all(check["passed"] for check in outcome_checks)
 
     counts = Counter(row.tool_name for row in evidence.invocations)
-    bounds_checks = [
-        {
-            "tool_name": bound.tool_name,
-            "minimum": bound.minimum,
-            "maximum": bound.maximum,
-            "actual": counts[bound.tool_name],
-            "passed": bound.minimum <= counts[bound.tool_name] <= bound.maximum,
-        }
-        for bound in evidence.expectation.tool_call_bounds
-    ]
+    semantic_counts = Counter(row.tool_name for row in expected_invocations)
+    bounds_checks = []
+    for bound in evidence.expectation.tool_call_bounds:
+        minimum = bound.minimum
+        maximum = bound.maximum
+        if evidence.provider_neutral and evidence.category == "duplicate_timeout_recovery":
+            minimum = semantic_counts[bound.tool_name]
+            maximum = minimum
+        bounds_checks.append(
+            {
+                "tool_name": bound.tool_name,
+                "minimum": minimum,
+                "maximum": maximum,
+                "actual": counts[bound.tool_name],
+                "passed": minimum <= counts[bound.tool_name] <= maximum,
+            }
+        )
     call_cardinality = all(check["passed"] for check in bounds_checks)
     forbidden_observed = sorted(
         row.tool_name
@@ -414,15 +453,24 @@ def _trace_results(evidence: ScenarioEvidence) -> tuple[CriterionResult, ...]:
         if row.tool_name in {"issue_refund", "update_shipping_address", "escalate_ticket"}
     ]
     expects_stable_replay = (
-        evidence.category == "duplicate_timeout_recovery"
+        not evidence.provider_neutral
+        and evidence.category == "duplicate_timeout_recovery"
         and len(state_changing_expected) == 1
         and not any(row.status == "failed" for row in expected_invocations)
         and not any(row.duplicate is True for row in expected_invocations)
     )
     replay_events = [event for event in traces if event.event_type == "tool_replay"]
-    expected_replay_call_ids = (
-        [state_changing_expected[0].tool_call_id] if expects_stable_replay else []
-    )
+    expected_replay_call_ids: list[str] = []
+    if expects_stable_replay:
+        expected_state_change = state_changing_expected[0]
+        if evidence.provider_neutral:
+            expected_index = expected_invocations.index(expected_state_change)
+            if expected_index < len(evidence.invocations):
+                expected_replay_call_ids = [evidence.invocations[expected_index].tool_call_id]
+            else:
+                expected_replay_call_ids = ["<missing-provider-call-id>"]
+        else:
+            expected_replay_call_ids = [expected_state_change.tool_call_id]
     actual_replay_call_ids = [str(event.payload.get("tool_call_id", "")) for event in replay_events]
     replay_order_valid = all(
         event.sequence_number > outcome_sequence_by_id.get(call_id, len(traces) + 1)
@@ -769,11 +817,24 @@ def _escalation_results(evidence: ScenarioEvidence) -> tuple[CriterionResult, ..
     )
     if expected:
         expected_keys = {
-            (row.order_id, row.reason_code, row.reason, row.priority, row.status)
+            (
+                row.order_id,
+                row.reason_code,
+                *(() if evidence.provider_neutral else (row.reason,)),
+                row.priority,
+                row.status,
+            )
             for row in expected
         }
         actual_keys = {
-            (row.order_id, row.reason_code, row.reason, row.priority, row.status) for row in actual
+            (
+                row.order_id,
+                row.reason_code,
+                *(() if evidence.provider_neutral else (row.reason,)),
+                row.priority,
+                row.status,
+            )
+            for row in actual
         }
         return (
             _result(

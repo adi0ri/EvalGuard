@@ -242,6 +242,75 @@ def _result(
     )
 
 
+def _provider_neutral_recovery_evidence(definition: ScenarioDefinition) -> ScenarioEvidence:
+    evidence = _evidence(definition)
+    semantic_invocations: list[InvocationSnapshot] = []
+    for expected, invocation in zip(
+        evidence.expectation.tool_invocations,
+        evidence.invocations,
+        strict=True,
+    ):
+        if expected.status == "failed" or expected.duplicate is True:
+            continue
+        arguments = dict(invocation.arguments)
+        result = None if invocation.result is None else dict(invocation.result)
+        if "reason" in arguments:
+            arguments["reason"] = "Provider-authored semantic reason"
+        if result is not None and "reason" in result:
+            result["reason"] = "Provider-authored semantic reason"
+        semantic_invocations.append(
+            replace(
+                invocation,
+                tool_call_id=f"real-call-{len(semantic_invocations) + 1}",
+                arguments=arguments,
+                result=result,
+            )
+        )
+
+    trace_events: list[TraceSnapshot] = [
+        TraceSnapshot(1, "provider_request", {"scenario_key": definition.key})
+    ]
+    for invocation in semantic_invocations:
+        trace_events.extend(
+            [
+                TraceSnapshot(
+                    len(trace_events) + 1,
+                    "tool_call",
+                    {
+                        "tool_call_id": invocation.tool_call_id,
+                        "tool_name": invocation.tool_name,
+                        "arguments": invocation.arguments,
+                    },
+                ),
+                TraceSnapshot(
+                    len(trace_events) + 2,
+                    "tool_result",
+                    {
+                        "tool_call_id": invocation.tool_call_id,
+                        "tool_name": invocation.tool_name,
+                    },
+                ),
+            ]
+        )
+    trace_events.append(
+        TraceSnapshot(
+            len(trace_events) + 1,
+            "provider_response",
+            {"scenario_key": definition.key},
+        )
+    )
+    tickets = tuple(
+        replace(ticket, reason="Provider-authored semantic reason") for ticket in evidence.tickets
+    )
+    return replace(
+        evidence,
+        invocations=tuple(semantic_invocations),
+        trace_events=tuple(trace_events),
+        tickets=tickets,
+        provider_neutral=True,
+    )
+
+
 @pytest.mark.parametrize("definition", PHASE3_SCENARIOS, ids=lambda row: row.key)
 def test_every_reference_scenario_passes_its_deterministic_oracle(
     definition: ScenarioDefinition,
@@ -252,6 +321,38 @@ def test_every_reference_scenario_passes_its_deterministic_oracle(
     assert all(row.passed for row in outcomes), [
         (row.grader_name, row.criterion, row.details) for row in outcomes if not row.passed
     ]
+
+
+@pytest.mark.parametrize(
+    "case_key",
+    [
+        "duplicate-refund-stable-call-replay",
+        "duplicate-address-semantic-retry",
+        "duplicate-escalation-semantic-retry",
+        "recover-after-lookup-not-found",
+    ],
+)
+def test_real_provider_grading_uses_minimal_semantics_not_fake_fault_choreography(
+    case_key: str,
+) -> None:
+    evidence = _provider_neutral_recovery_evidence(_scenario(case_key))
+
+    outcomes = grade_scenario(evidence)
+
+    assert all(row.passed for row in outcomes), [
+        (row.grader_name, row.criterion, row.details) for row in outcomes if not row.passed
+    ]
+    assert not any(event.event_type == "tool_replay" for event in evidence.trace_events)
+
+
+def test_real_provider_semantic_retry_case_rejects_an_extra_mutation_call() -> None:
+    evidence = _provider_neutral_recovery_evidence(_scenario("duplicate-address-semantic-retry"))
+    mutation = evidence.invocations[-1]
+    duplicate = replace(mutation, tool_call_id="real-call-extra")
+
+    outcomes = grade_scenario(replace(evidence, invocations=(*evidence.invocations, duplicate)))
+
+    assert _result(outcomes, "trace_v1", "call_cardinality").passed is False
 
 
 def test_missing_refund_fails_state_even_when_trace_and_resolution_claim_success() -> None:

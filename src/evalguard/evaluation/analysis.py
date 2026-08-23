@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from decimal import Decimal
 from math import ceil
 from typing import Any, Literal
 from uuid import UUID
@@ -20,8 +21,10 @@ from evalguard.db.models import (
     ExecutionFaultPlan,
     Experiment,
     GraderResult,
+    ProviderTurn,
     TraceEvent,
 )
+from evalguard.providers.configuration import OPENAI_PROVIDER
 
 TERMINAL_EXECUTION_STATUSES = frozenset({"completed", "failed", "enqueue_failed"})
 StabilityStatus = Literal["stable_pass", "stable_fail", "unstable", "incomplete"]
@@ -156,6 +159,20 @@ class GridIntegrity:
 
 
 @dataclass(frozen=True)
+class ProviderUsage:
+    request_count: int
+    response_count: int
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    total_tokens: int
+    estimated_cost_usd: str | None
+    returned_models: tuple[str, ...]
+    latency: DurationMetric
+
+
+@dataclass(frozen=True)
 class ExperimentAnalysis:
     experiment_id: UUID
     status: str
@@ -166,6 +183,8 @@ class ExperimentAnalysis:
     prompt: PromptIdentity | None
     prompt_is_published: bool | None
     provider: str
+    provider_model: str | None
+    provider_config_hash: str | None
     trials: int
     max_attempts: int
     job_timeout_seconds: int
@@ -179,6 +198,7 @@ class ExperimentAnalysis:
     quality_comparison_ready: bool
     token_usage_available: bool
     cost_available: bool
+    provider_usage: ProviderUsage | None
     fault_injection_present: bool
     grid_integrity: GridIntegrity
     execution_counts: ExecutionCounts
@@ -259,6 +279,7 @@ class _ExperimentRows:
     prompt: AgentPrompt | None
     expected_cases: tuple[EvaluationCase, ...]
     executions: tuple[_ExecutionEvidence, ...]
+    provider_turns: tuple[ProviderTurn, ...]
 
 
 def _ratio(numerator: int, denominator: int) -> Ratio:
@@ -380,6 +401,20 @@ def _load_experiment_rows(
             evidence.graders.append(grader)
 
     loaded: dict[UUID, _ExperimentRows] = {}
+    provider_turns_by_experiment: dict[UUID, list[ProviderTurn]] = defaultdict(list)
+    if headers:
+        provider_turn_rows = session.execute(
+            select(CaseExecution.experiment_id, ProviderTurn)
+            .join(ProviderTurn, ProviderTurn.case_execution_id == CaseExecution.id)
+            .where(CaseExecution.experiment_id.in_(experiment_ids))
+            .order_by(
+                CaseExecution.experiment_id,
+                ProviderTurn.case_execution_id,
+                ProviderTurn.sequence_number,
+            )
+        ).all()
+        for turn_experiment_id, provider_turn in provider_turn_rows:
+            provider_turns_by_experiment[turn_experiment_id].append(provider_turn)
     expected_cases_by_suite: dict[UUID, list[EvaluationCase]] = defaultdict(list)
     if headers:
         suite_ids = {suite.id for _, suite, _ in headers.values()}
@@ -398,6 +433,7 @@ def _load_experiment_rows(
             prompt=prompt,
             expected_cases=tuple(expected_cases_by_suite[suite.id]),
             executions=tuple(grouped[experiment_id].values()),
+            provider_turns=tuple(provider_turns_by_experiment[experiment_id]),
         )
     return loaded
 
@@ -648,6 +684,50 @@ def _analyze_rows(rows: _ExperimentRows) -> ExperimentAnalysis:
     retry_attempts = sum(
         max(0, evidence.execution.attempt_count - 1) for evidence in expected_evidence
     )
+    provider_requests = [
+        turn for turn in rows.provider_turns if turn.request_started_at is not None
+    ]
+    provider_responses = [turn for turn in rows.provider_turns if turn.response_payload is not None]
+    complete_token_usage = bool(provider_responses) and all(
+        turn.input_tokens is not None
+        and turn.output_tokens is not None
+        and turn.total_tokens is not None
+        for turn in provider_responses
+    )
+    token_usage_available = complete_token_usage and len(provider_requests) == len(
+        provider_responses
+    )
+    complete_cost = bool(provider_responses) and all(
+        turn.estimated_cost_usd_micros is not None for turn in provider_responses
+    )
+    cost_available = complete_cost and len(provider_requests) == len(provider_responses)
+    total_cost_micros = sum(turn.estimated_cost_usd_micros or 0 for turn in provider_responses)
+    provider_usage = None
+    if experiment.provider == "openai-responses":
+        provider_usage = ProviderUsage(
+            request_count=len(provider_requests),
+            response_count=len(provider_responses),
+            input_tokens=sum(turn.input_tokens or 0 for turn in provider_responses),
+            cached_input_tokens=sum(turn.cached_input_tokens or 0 for turn in provider_responses),
+            output_tokens=sum(turn.output_tokens or 0 for turn in provider_responses),
+            reasoning_tokens=sum(turn.reasoning_tokens or 0 for turn in provider_responses),
+            total_tokens=sum(turn.total_tokens or 0 for turn in provider_responses),
+            estimated_cost_usd=(
+                f"{Decimal(total_cost_micros) / Decimal(1_000_000):.6f}" if cost_available else None
+            ),
+            returned_models=tuple(
+                sorted(
+                    {
+                        turn.response_model
+                        for turn in provider_responses
+                        if turn.response_model is not None
+                    }
+                )
+            ),
+            latency=_duration_metric(
+                [turn.latency_ms for turn in provider_requests if turn.latency_ms is not None]
+            ),
+        )
 
     return ExperimentAnalysis(
         experiment_id=experiment.id,
@@ -667,6 +747,8 @@ def _analyze_rows(rows: _ExperimentRows) -> ExperimentAnalysis:
         ),
         prompt_is_published=None if prompt is None else prompt.is_published,
         provider=experiment.provider,
+        provider_model=experiment.provider_model,
+        provider_config_hash=experiment.provider_config_hash,
         trials=experiment.trials,
         max_attempts=experiment.max_attempts,
         job_timeout_seconds=experiment.job_timeout_seconds,
@@ -674,12 +756,17 @@ def _analyze_rows(rows: _ExperimentRows) -> ExperimentAnalysis:
         retry_backoff_seconds=experiment.retry_backoff_seconds,
         created_at=experiment.created_at,
         completed_at=experiment.completed_at,
-        result_label="synthetic infrastructure validation",
+        result_label=(
+            "synthetic infrastructure validation"
+            if experiment.provider == "deterministic-fake"
+            else "real-provider evaluation on synthetic ParcelDesk cases"
+        ),
         is_terminal=is_terminal,
         is_fully_graded=is_fully_graded,
         quality_comparison_ready=experiment.status == "completed" and is_fully_graded,
-        token_usage_available=False,
-        cost_available=False,
+        token_usage_available=token_usage_available,
+        cost_available=cost_available,
+        provider_usage=provider_usage,
         fault_injection_present=any(
             evidence.fault_plan is not None for evidence in rows.executions
         ),
@@ -710,7 +797,11 @@ def _analyze_rows(rows: _ExperimentRows) -> ExperimentAnalysis:
         ),
         stable_case_rate=_ratio(stable_cases, len(rows.expected_cases)),
         timing=TimingAnalysis(
-            label="synthetic infrastructure timing, not model latency",
+            label=(
+                "synthetic infrastructure timing, not model latency"
+                if experiment.provider == "deterministic-fake"
+                else "client-observed provider/API and worker timing, not server-only model latency"
+            ),
             queue_delay=_duration_metric(queue_durations),
             run_duration=_duration_metric(run_durations),
             end_to_end_duration=_duration_metric(end_to_end_durations),
@@ -802,6 +893,8 @@ def _assert_comparable(
         "suite_id",
         "suite_definition_hash",
         "provider",
+        "provider_model",
+        "provider_config_hash",
         "trials",
         "max_attempts",
         "job_timeout_seconds",
@@ -811,6 +904,15 @@ def _assert_comparable(
     mismatches = [
         field for field in policy_fields if getattr(baseline, field) != getattr(candidate, field)
     ]
+    if baseline.provider == candidate.provider == OPENAI_PROVIDER:
+        baseline_models = (
+            [] if baseline.provider_usage is None else baseline.provider_usage.returned_models
+        )
+        candidate_models = (
+            [] if candidate.provider_usage is None else candidate.provider_usage.returned_models
+        )
+        if not baseline_models or baseline_models != candidate_models:
+            mismatches.append("returned_provider_models")
     baseline_grid = {
         (case.case_key, trial.trial_number) for case in baseline.cases for trial in case.trials
     }

@@ -9,8 +9,11 @@ transparent aggregate summaries, strict experiment compatibility checks, and a
 small server-rendered comparison report. Verified Phase 5 implementation commit
 `c481ed4` and documentation commit `270bbe4` are published on `origin/main`; no new
 remote-CI result is claimed. Phase 6's cost-free portfolio guide and
-deterministic-fake demo are locally verified. Its optional real-provider track
-still requires a separate explicit approval for credentials and possible spending.
+deterministic-fake demo are locally verified and published through `31a4192`. The
+remaining milestone is implemented as a bounded, disabled-by-default OpenAI
+Responses path with a durable provider-turn ledger and keyless tests. Its local
+keyless acceptance gate passed. No provider credential was available, zero paid
+calls were made, and no live-model result is inferred from that acceptance.
 
 The recorded deterministic-fake results are **synthetic infrastructure
 validation**. The Phase 3–5 evidence proves that the local API, queue, worker,
@@ -26,7 +29,7 @@ interview walkthrough, see [`docs/PORTFOLIO_GUIDE.md`](docs/PORTFOLIO_GUIDE.md).
 - A Python 3.12 modular application with separate FastAPI and RQ worker processes.
 - PostgreSQL-backed suites, cases, experiments, executions, customers, orders,
   shipping addresses, refunds, support tickets, tool invocations, trace events, and
-  criterion-level grader results.
+  criterion-level grader results, plus durable network-provider turns.
 - Two published, source-controlled agent prompts with stable content hashes. They
   are separate from immutable customer-request cases; new experiments persist the
   selected prompt identity and its provider-request trace evidence.
@@ -47,6 +50,16 @@ interview walkthrough, see [`docs/PORTFOLIO_GUIDE.md`](docs/PORTFOLIO_GUIDE.md).
 - Typed `lookup_order`, `issue_refund`, `update_shipping_address`, and
   `escalate_ticket` tools with validated, closed Pydantic object contracts and a
   deterministic fake provider.
+- A strict OpenAI Responses adapter pinned to server-owned `gpt-5.6-luna`
+  configuration. The API admits one authorized idempotency-keyed real-provider
+  experiment globally, limited to 25 cases, one trial, `max_attempts=1`, a
+  300-second job timeout, no synthetic fault injection, and a conservative $5
+  experiment ceiling. It is disabled by default.
+- Durable provider-turn states commit an exact request before send, perform network
+  I/O without an open database transaction, persist sanitized response/usage before
+  tools, and advance one append-only tool-output prefix in short transactions. An
+  unknown send outcome is not retried; a safe worker interruption resumes the same
+  logical attempt through a new dispatch generation at most three times.
 - Execution-scoped composite ownership for support tickets, including a PostgreSQL
   requirement that the ticket customer own the referenced order. Address changes
   are allowed only for `pending`/`processing` orders; refunds at or above 50,000
@@ -93,17 +106,20 @@ interview walkthrough, see [`docs/PORTFOLIO_GUIDE.md`](docs/PORTFOLIO_GUIDE.md).
 - On-demand experiment summaries with explicit numerators/denominators, criterion
   families/categories, full-vector trial stability, attempts/retries, and labeled
   queue/run/end-to-end infrastructure timing. Missing or ungraded work cannot pass
-  vacuously; token and cost availability is explicitly false.
+  vacuously. Deterministic-fake token and cost availability remains explicitly
+  false. Real response usage is provider-reported; its displayed USD cost is an
+  estimate from the immutable dated price snapshot, not billing data.
 - Compatible two-arm comparisons and an autoescaped Jinja2 HTML report derived
   from the same coherent evidence reduction. Comparisons require matching suite/hash,
   provider, trials, resilience policy, and exact case/trial grid, and reject
   fault-injected arms.
 - Dependency-independent liveness and PostgreSQL/Redis-aware readiness probes.
-- Eight Alembic revisions (`20260818_0001` through `20260822_0008`) for the initial
+- Nine Alembic revisions (`20260818_0001` through `20260823_0009`) for the initial
   schema, suite sealing, case-move protection, publication serialization, order
   address fields, relational support tickets, ticket/order customer ownership, and
-  Phase 4 resilience state, and Phase 5 prompt/trial identity; JSON structured
-  logging; Docker Compose; and a GitHub Actions workflow.
+  Phase 4 resilience state, Phase 5 prompt/trial identity, and the Phase 6 provider
+  identity/turn/recovery ledger; JSON structured logging; Docker Compose; and a
+  GitHub Actions workflow.
 
 Revision `20260822_0007` preserves the old queue policy by backfilling existing
 experiments with a 300-second timeout, requeues legacy `running` and `retrying`
@@ -122,9 +138,14 @@ POST /api/v1/experiments
 RQ worker
   -> claim one generation as a durable attempt + lease
   -> materialize isolated synthetic customer/order rows
-  -> deterministic typed scenario plan
-  -> actor-scoped production tools
-  -> persist business state, tool invocations, and ordered trace/replay evidence
+  -> selected provider path
+     -> deterministic fake: local typed plan + tools + graders in one transaction
+     -> OpenAI Responses: commit exact ProviderTurn request
+        -> send with no database transaction open
+        -> commit sanitized response + usage before tools
+        -> persist one tool result per short transaction
+  -> actor-scoped production tools and provider-neutral deterministic graders
+  -> persist business state, tool invocations, ordered trace/replay, and turn evidence
   -> run six deterministic evidence graders for v2
   -> reconcile the parent from every execution status
 
@@ -165,8 +186,17 @@ fixture state, business effects, invocations, ordinary trace, grader rows, and
 resolution together; a separate transaction persists attempt failure and retry or
 terminal evidence. Before any provider/tool work, the executor locks the execution
 again and revalidates its attempt number, generation, and `running` status, fencing
-a paused worker whose claim recovery already superseded. A future network provider
-will need shorter durable steps and explicit resume semantics.
+a paused worker whose claim recovery already superseded.
+
+The OpenAI path is separate. It stores an immutable non-secret model/configuration
+hash and dated pricing snapshot on the experiment. Each `ProviderTurn` moves through
+database-enforced states such as `prepared`, `request_started`,
+`response_received`, `tools_completed`, and `final_response`. A send that crossed
+the request fence without a durable response becomes non-retryable
+`indeterminate`; it is never sent again. A worker interruption at a safe committed
+boundary can create a newer `resume` dispatch for the same attempt, up to three
+times. Late responses are retained as `superseded` evidence and cannot authorize
+stale effects.
 
 The v2 suite's typed fixtures can materialize more than one customer/order while
 retaining execution isolation. Its expected policy oracle is stored independently
@@ -308,6 +338,23 @@ Prompt fields may be omitted to select the current v2 default. An optional
 listed above, and `fail_attempts` (1–5); non-development/test environments reject
 it. It is intentionally omitted from the ordinary request.
 
+The bounded `openai-responses` shape uses the same suite/prompt fields but requires
+`provider: "openai-responses"`, `trials: 1`, `max_attempts: 1`,
+`job_timeout_seconds: 300`, no `fault_injection`, and an `Idempotency-Key` header.
+The API gate defaults off, accepts at most 25 suite cases, and allows only one such
+experiment globally; exact same-key replay returns the existing experiment while a
+different key or intent conflicts. Clients cannot choose the model, price, storage,
+retry, or parallel-tool settings. The server-owned identity pins
+`gpt-5.6-luna`, reasoning `none`, 1,200 maximum output tokens, six turns, a
+45-second per-turn timeout, zero SDK retries, one network attempt per turn,
+`store=false`, `parallel_tool_calls=false`, and a $5 ceiling.
+
+`.env.example` documents only safe defaults. The Compose application environment
+deliberately does not forward an OpenAI key. A paid run requires the real-provider
+gate and an `EVALGUARD_OPENAI_API_KEY` supplied only to the worker process; no such
+credential was present during implementation, so this README does not present an
+unexercised paid command or result.
+
 The endpoint returns `202` with an experiment ID and 75 execution IDs for this
 three-trial v2 request after
 the durable outbox commit, not after all Redis calls succeed. Concurrent compatible
@@ -317,11 +364,14 @@ execution generation. Poll
 order (including a structured shipping address when present), refund, support
 ticket, tool invocations, ordered trace, structured resolution, and grader results
 from `GET /api/v1/executions/{execution_id}`. Experiment retrieval also exposes the
-prompt, trial count, resilience policy, and attempt counts; execution retrieval
-adds current generation, lease/failure summary, ordered attempts, and dispatch
-history. `GET /api/v1/experiments/{experiment_id}/summary` derives aggregate
-evidence. Create a second prompt arm with the same settings, then use the comparison
-JSON or report endpoints listed below.
+prompt, provider model/configuration hash, trial count, resilience policy, and
+attempt counts; execution retrieval adds current generation, lease/failure summary,
+recovery counts, ordered attempts, attempt/resume dispatch history, and sanitized
+provider turns. `GET /api/v1/experiments/{experiment_id}/summary` derives aggregate
+evidence and conditionally reports provider requests/responses, returned models,
+token usage, provider latency, and price-snapshot-estimated cost. Create a second
+deterministic-fake prompt arm with the same settings, then use the comparison JSON
+or report endpoints listed below.
 
 ## Checks
 
@@ -426,6 +476,18 @@ preserved all identifiers. With Redis stopped, liveness remained `200`, readines
 became `503`, and readiness returned to `200` after restoration. These are
 synthetic infrastructure results, not prompt/model quality or model latency.
 
+Phase 6 adds keyless unit and PostgreSQL/API/RQ coverage for strict Responses
+requests, retry-free redacted transport, immutable provider identity, the durable
+turn state machine, single-run idempotency, provider-neutral grading, execution
+isolation, provider-usage and estimated-cost plumbing, malformed scripted responses,
+unknown outcomes that are not resent, and bounded same-attempt recovery. Scripted
+clients replace the network, including a lock probe that proves no execution
+transaction remains open during the simulated send. Late responses after an
+indeterminate fence are retained as superseded evidence without executing tools.
+The final current-tree suite passed all 247 tests; clean revision `0009`, Compose,
+deterministic-fake API/RQ smoke, idempotent replay, and readiness outage/recovery
+also passed. Exact commands and timing are in `PROGRESS.md`. No paid run occurred.
+
 ## Portfolio demo
 
 After Compose is ready and `evalguard.cli seed` has run, this PowerShell command
@@ -441,7 +503,7 @@ The script is deliberately restricted to `deterministic-fake`; it cannot use a
 provider credential or incur model cost. See the portfolio guide for the suggested
 ten-minute walkthrough and the exact claims the run can support.
 
-## API implemented through Phase 5
+## API implemented through Phase 6
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -450,10 +512,10 @@ ten-minute walkthrough and the exact claims the run can support.
 | `GET` | `/api/v1/suites` | List loaded suite versions and case counts |
 | `GET` | `/api/v1/prompts` | List published agent-prompt versions and content hashes |
 | `POST` | `/api/v1/experiments` | Persist experiment/executions/outbox and best-effort dispatch; return `202` |
-| `GET` | `/api/v1/experiments/{experiment_id}` | Retrieve lifecycle, retry/timeout/step policy, and execution attempt counts |
-| `GET` | `/api/v1/experiments/{experiment_id}/summary` | Derive explicit counts, ratios, stability, attempts, and timing |
+| `GET` | `/api/v1/experiments/{experiment_id}` | Retrieve lifecycle, provider identity, retry/timeout/step policy, and execution attempt counts |
+| `GET` | `/api/v1/experiments/{experiment_id}/summary` | Derive explicit counts, ratios, stability, attempts, timing, and available provider usage/estimated cost |
 | `GET` | `/api/v1/experiments/{baseline_id}/compare/{candidate_id}` | Compare two compatible, non-faulted prompt arms |
-| `GET` | `/api/v1/executions/{execution_id}` | Retrieve state, attempts, dispatches, lease/failure summary, trace, tool calls, and graders |
+| `GET` | `/api/v1/executions/{execution_id}` | Retrieve state, attempts, dispatches, provider turns, lease/failure summary, trace, tool calls, and graders |
 | `GET` | `/reports/experiments/{baseline_id}/compare/{candidate_id}` | Render the shared comparison as autoescaped HTML with raw-evidence links |
 
 A compatible replay of an `Idempotency-Key` returns the existing experiment ID and
@@ -470,16 +532,20 @@ converge. The API's initial-work override applies only to queued/legacy
 ## Phase 6 status
 
 The cost-free portfolio documentation and deterministic-fake demo are implemented
-and locally verified.
+and locally verified. The user subsequently authorized the remaining bounded,
+keyless milestone implementation. The OpenAI Responses adapter, Luna configuration,
+provider-turn ledger, same-attempt recovery, usage/estimated-cost reduction, and
+credential-free tests are implemented without changing the fake-only demo or either
+published suite. The final keyless local gate is complete and recorded in
+`PROGRESS.md`.
 
-A single real-provider adapter and one controlled experiment remain gated on
-separate explicit approval for credentials and possible spending. A correct network
-integration must replace the fake path's long database transaction with shorter
-durable provider/tool steps and explicit resume semantics before any call is made.
-Manual retry-failures and real token/cost accounting also remain deferred.
-
-There is currently no real model, client-side application, manual retry API,
-token/cost data, or claim of prompt/model performance.
+No worker-only credential was available and zero paid calls were made. Therefore
+there is no live-model output, measured real-experiment quality, provider billing
+record, or claim of prompt/model performance. A single controlled real experiment
+remains unperformed behind the explicitly separated external credential and
+paid-run boundary.
+The manual retry-failures API, client-side application, authentication, and cloud
+deployment remain outside this milestone.
 
 ## Project records
 

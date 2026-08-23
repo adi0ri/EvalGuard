@@ -66,8 +66,22 @@ def create_dispatch(
     execution_id: UUID,
     generation: int,
     available_at: datetime | None = None,
+    *,
+    delivery_kind: str = "attempt",
+    attempt_number: int | None = None,
 ) -> ExecutionDispatch:
     """Create or return one durable dispatch intent for an execution generation."""
+
+    if delivery_kind not in {"attempt", "resume"}:
+        raise ValueError("Dispatch delivery kind must be 'attempt' or 'resume'")
+    if delivery_kind == "attempt" and attempt_number is not None:
+        raise ValueError("Attempt deliveries cannot target an existing attempt")
+    if delivery_kind == "resume" and (
+        not isinstance(attempt_number, int)
+        or isinstance(attempt_number, bool)
+        or attempt_number < 1
+    ):
+        raise ValueError("Resume deliveries require a positive attempt number")
 
     job_id = job_id_for_execution(execution_id, generation)
     execution = session.get(CaseExecution, execution_id)
@@ -88,10 +102,14 @@ def create_dispatch(
         )
     )
     if existing is not None:
-        if existing.job_id != job_id:
+        if (
+            existing.job_id != job_id
+            or existing.delivery_kind != delivery_kind
+            or existing.attempt_number != attempt_number
+        ):
             raise DispatchIdentityError(
                 f"Persisted dispatch for execution {execution_id} generation {generation} "
-                "has an unexpected job identity"
+                "has an unexpected delivery identity"
             )
         return existing
 
@@ -99,6 +117,8 @@ def create_dispatch(
         case_execution_id=execution_id,
         generation=generation,
         job_id=job_id,
+        delivery_kind=delivery_kind,
+        attempt_number=attempt_number,
         status="pending",
         attempt_count=0,
         available_at=available_at or datetime.now(UTC),

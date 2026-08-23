@@ -705,8 +705,8 @@ No Phase 5 remote-CI result is claimed.
 
 ## 2026-08-22 — D026: Split Phase 6 portfolio work from the real-provider approval gate
 
-**Status:** Accepted for the Phase 6 start; the real-provider implementation and
-run remain unapproved.
+**Status:** Superseded for keyless adapter implementation by D027. Its separate
+paid-invocation approval boundary remains in force.
 
 Phase 5 commits `c481ed4` and `270bbe4` were published before this decision; no
 Phase 5 remote-CI result is inferred from that push.
@@ -738,3 +738,62 @@ measured usage, run persisted tool calls in short transactions, and repeat until
 final resolution can be graded. Real results must remain separate from synthetic
 infrastructure evidence. This decision defines the safety boundary; it does not
 claim that the durable real-provider state machine exists yet.
+
+## 2026-08-23 — D027: Implement one keyless, bounded Responses track without authorizing a paid call
+
+**Status:** Accepted, implemented, and locally verified keylessly for Phase 6. A
+credentialed invocation remains unperformed and externally blocked.
+
+**Reason:** The user directed EvalGuard to finish all phases, push the result, and
+not ask again. That explicitly advances the implementation milestone, including
+the optional adapter and durable state machine. It does not supply a credential or
+name a paid request budget, so it cannot turn an absent secret into authorization
+for a billable network call. Environment preflight found neither
+`EVALGUARD_OPENAI_API_KEY` nor `OPENAI_API_KEY`; only Boolean presence was checked.
+
+The selected keyless implementation uses the OpenAI Responses API with
+`gpt-5.6-luna`: it supports function calling and structured output while keeping a
+future bounded smoke inexpensive. Each experiment persists a server-owned,
+non-secret configuration and SHA-256 identity, including a 2026-08-23 price
+snapshot. The runtime reports provider-returned token counts and a cost estimate
+derived from that immutable snapshot; it never labels the estimate as billing or
+invoice data.
+
+**Safety boundary:** Real execution is disabled by default and the key is a
+worker-only `SecretStr`. The API requires an idempotency key and PostgreSQL permits
+only the one authorized real-provider experiment. That experiment is limited to
+one trial, one logical attempt, at most 25 cases, a 300-second job timeout, six
+provider turns per case, and a conservative $5 experiment ceiling. Deterministic
+fault injection is unavailable. SDK retries are zero, each turn has one network
+attempt, `store=false`, and parallel tool calls are disabled.
+
+The exact request is locally validated, hashed, persisted, and committed before
+the send fence. Network I/O occurs with no open database transaction. A purchased
+response or sanitized malformed-response envelope is committed before any tool is
+executed, and each persisted tool result advances in its own short transaction.
+`request_started` without response evidence is terminal and indeterminate; it is
+never resent. Worker interruption at `prepared`, `response_received`,
+`tools_completed`, or `final_response` may resume the same logical attempt for at
+most three delivery generations. A late response is retained as superseded
+evidence. Returned-model mismatch keeps evidence and usage but disables cost
+attribution and tool execution. Provider-neutral grading ignores provider-chosen
+call IDs and explanatory prose while retaining typed order, semantic arguments,
+persisted state, authorization, policy, and resolution checks. Fake-only injected
+duplicate/retry choreography is not scored as real-model behavior.
+
+**Alternatives:** Reusing the fake provider's long transaction would hold locks
+across network latency. Whole-attempt retry could duplicate a paid request or
+state change. Treating a price estimate as measured billing would overstate the
+evidence. Allowing unlimited experiments with separate $5 ceilings would violate
+the bounded-run intent. Adding a secret to Compose's shared API environment would
+unnecessarily broaden credential exposure.
+
+**Consequences:** The adapter, ledger, recovery path, API exposure, and scripted
+keyless tests passed their local gate without a real call. Review added a
+late-response regression: an indeterminate purchased request may accept one late
+response only as immutable `superseded` evidence, never as permission for tool or
+business effects. The deterministic fake remains the CI/default provider and the
+portfolio demo remains fake-only. A future paid result requires an externally
+supplied worker credential and an explicitly observed run; until then EvalGuard
+records zero paid calls, no real model-quality result, and no measured provider
+bill.

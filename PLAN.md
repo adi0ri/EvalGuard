@@ -1,30 +1,31 @@
 # EvalGuard Delivery Plan
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 ## Current milestone
 
-**Phase 6 — cost-free portfolio track complete; real-provider track gated.**
-The user explicitly advanced the milestone and requested publication of Phase 5.
-Implementation commit `c481ed4` and documentation commit `270bbe4` are now
-published on `origin/main`. No Phase 5 remote-CI result is claimed. The active,
-authorized work is a portfolio guide and repeatable deterministic-fake PowerShell
-demo that preserve every Phase 5 evidence label and limitation.
+**Phase 6 — keyless implementation and local acceptance complete; credentialed
+result blocked.** The user explicitly directed EvalGuard to finish
+all phases, push the result, and not ask again. D027 records that this advances the
+implementation milestone but does not authorize an unbounded or credentialless
+paid call. Environment preflight checked presence only and found neither
+`EVALGUARD_OPENAI_API_KEY` nor `OPENAI_API_KEY`; zero paid calls have been made.
 
-The original contract separately requires explicit approval for credentials and
-possible spending before one real-provider adapter is added or invoked. That
-second approval has not been given. No provider/model, credential, request budget,
-or monetary cap is therefore selected or used, and the real-provider experiment is
-not yet authorized.
+The selected bounded track is OpenAI Responses with `gpt-5.6-luna`. The adapter,
+immutable configuration/hash, price-snapshot cost estimator, durable provider-turn
+ledger, short transaction executor, same-attempt recovery, API retrieval, usage
+summary, provider-neutral grading, and keyless scripted tests are implemented.
+Real execution is disabled by default. PostgreSQL and the API fence the one
+authorized experiment to an idempotent submission, at most 25 cases, one trial,
+one logical attempt, six turns per case, and a conservative $5 ceiling. The
+deterministic fake remains the CI/default path and portfolio-demo results remain
+synthetic infrastructure validation.
 
-The cost-free track is locally verified. The PowerShell parser passed; the demo
-completed two new 75-execution arms with 75/75 passing in each and 1,521/1,521
-criteria per arm; comparison/report retrieval passed with 150 raw links; the full
-199-test suite passed in 187.64 seconds; locked sync, Ruff, formatting, mypy,
-Compose configuration, image build, and package-content checks passed. Exact IDs
-and raw counts are in `PROGRESS.md`. Local commit `5a058e0` records this verified
-cost-free slice and remains unpushed; `origin/main` remains at requested Phase 5
-publication commit `270bbe4`.
+The earlier verified cost-free Phase 6 portfolio commits `5a058e0` and `31a4192`
+are published on `origin/main`. No remote-CI result is inferred. The final local
+implementation gate passed on the keyless tree; exact dependency, static, 247-test,
+migration, Compose, fake-smoke, readiness, and audit evidence is recorded in
+`PROGRESS.md`. This does not manufacture the separately blocked paid result.
 
 Phase 4 remains complete with implementation commit `e276ba5` and documentation
 commit `ac7d39e` published on `origin/main`. Earlier Phase 3 commits `083808c` and
@@ -481,14 +482,43 @@ queued deterministic breadth without mutating that historical definition.
   exact results without presenting them as model quality.
 - [x] Rerun proportionate static, automated, packaging, and live checks for the
   Phase 6 documentation/demo slice.
-- [ ] Receive separate explicit approval naming one provider/model, credential
-  handling, request scope, and possible-spend ceiling.
-- [ ] After that approval only, introduce shorter durable provider/tool steps and
-  explicit resume semantics; add one real-provider adapter without weakening the
-  deterministic fake or CI.
+- [x] Receive explicit direction to finish all phases and implement the optional
+  adapter while preserving the separate paid-invocation boundary.
+- [x] Select the official OpenAI Responses API and `gpt-5.6-luna`; persist a
+  server-owned non-secret configuration/hash and the dated pricing snapshot used
+  only for estimated cost.
+- [x] Add revision `20260823_0009` with immutable experiment provider identity,
+  one-authorized-run uniqueness, durable `ProviderTurn` states, append-only tool
+  outputs, same-attempt recovery identity, and PostgreSQL transition guards.
+- [x] Commit and validate the exact request before the send fence; perform network
+  I/O with no open database transaction; persist the response before tools; run
+  each tool result in its own short transaction.
+- [x] Make unknown send outcomes terminal and non-retryable; retain malformed and
+  late responses as evidence; permit at most three same-attempt worker resumes only
+  from safe committed states.
+- [x] Require a real-provider `Idempotency-Key`; limit the single experiment to at
+  most 25 cases, one trial, one attempt, 300 seconds, six turns per case, and a $5
+  conservative spend ceiling; disable SDK retries, storage, parallel tools, and
+  deterministic fault injection.
+- [x] Record provider-reported token usage, returned model, client-observed
+  latency, and immutable-price-snapshot estimated cost without presenting the
+  estimate as billing data.
+- [x] Add provider-neutral deterministic grading that ignores provider-generated
+  IDs/free text and removes fake-only fault choreography while preserving exact
+  semantic state, policy, authorization, typed-tool, trace, and resolution checks.
+- [x] Add keyless PostgreSQL/API/worker tests for API fencing, isolation, network
+  transaction boundaries, malformed/indeterminate responses, usage/cost,
+  returned-model mismatch, exact durable resume prefixes, and fake-provider
+  regression behavior.
+- [x] Finish the final-tree locked sync, static checks, full pytest run, clean
+  migration round trip/drift check, Compose build/startup, and live fake smoke;
+  record exact results in `PROGRESS.md` and reconcile every durable document.
+- [ ] Receive an externally supplied worker-only credential plus explicit paid-run
+  authorization within the recorded provider/model, scope, and $5 ceiling.
 - [ ] Run one bounded real experiment and record provider/model, configuration,
   revision, hashes, raw evidence, measured usage/cost sources, and limitations
-  separately from synthetic infrastructure validation.
+  separately from synthetic infrastructure validation. Blocker: no credential is
+  available and zero paid calls have been made.
 
 ## Risks and mitigations
 
@@ -507,14 +537,22 @@ queued deterministic breadth without mutating that historical definition.
 | Destructive test cleanup targets development state | Require test mode, a `*_test` PostgreSQL database, a non-development Redis database, and the test-only queue before cleanup; Redis DB 15 is the tested default. |
 | Fake-provider success is mistaken for model quality | Label results synthetic infrastructure validation throughout reports and provenance. |
 | Documentation drifts from behavior | Update durable documents with the implementing change and gate completion on exercised commands. |
-| A real-provider run introduces cost or secrets | Keep real providers in Phase 6 and require explicit user approval. |
+| A real-provider run introduces cost or secrets | Disable it by default; keep the key worker-only; require an idempotency key; permit one PostgreSQL-fenced experiment; cap cases/trials/attempts/turns and conservative estimated spend; never call without a credential and paid-run authorization. |
+| A provider timeout has an unknown paid outcome | Commit `request_started` before send, never resend an outcome without durable response evidence, and terminalize it as non-retryable indeterminate. |
+| A worker exits after a safe real-provider boundary | Resume the same logical attempt only from committed safe states, fence each delivery generation, preserve the paid-call/tool prefix, and stop after three recoveries. |
+| A floating model alias resolves differently | Persist requested config and every returned model; fail tool execution and cost attribution closed on an unapproved model, and require identical returned-model sets for comparisons. |
+| Estimated cost is mistaken for a provider bill | Derive it only from the immutable dated pricing snapshot, expose it as estimated USD, and keep provider usage separate from billing evidence. |
+| Fake-only retry choreography contaminates model quality | Use provider-neutral semantic expectations for real responses while retaining the original immutable suite and deterministic-fake resilience graders. |
 
 No Phase 0–5 local-acceptance blocker is known. One
 upstream FastAPI/Starlette `TestClient` deprecation warning is recorded in
-`PROGRESS.md`; the final Phase 5 suite passes all 199 tests. Phase 2 is published at
+`PROGRESS.md`; the final Phase 5 suite passed all 199 tests. Phase 2 is published at
 `26c3e86`; Phase 3 commits `083808c` and `6655e79` are published; Phase 4 commits
 `e276ba5` and `ac7d39e` are published; and Phase 5 commits `c481ed4` and `270bbe4`
-are published with `origin/main` at `270bbe4`.
+are published. Phase 6 portfolio commits `5a058e0` and `31a4192` are also
+published. The Phase 6 keyless implementation gate is locally complete; its
+requested commit and publication checkpoint remain the next action. No remote-CI
+result is claimed.
 Phase 5 implementation and final-acceptance criteria are checked above from exact
 local evidence and recorded in implementation commit `c481ed4` plus its durable
 documentation follow-up `270bbe4`. No Phase 4 or Phase 5 remote-CI result is
@@ -522,7 +560,8 @@ claimed.
 
 ## Precise next action
 
-Request the contract's separate explicit approval before selecting, adding, or
-invoking one real provider. That approval must name one provider/model, secret-
-delivery method, bounded request scope, and possible-spend ceiling. Record remote
-CI only if actually observed.
+Commit and publish the verified keyless implementation. After that, the only
+unchecked Phase 6 outcome is the credentialed experiment. Do not invoke it unless
+a worker-only credential and explicit paid-run authorization become available.
+Until then, keep it visibly blocked, report zero paid calls, and do not invent a
+live result. Record remote CI only if actually observed.

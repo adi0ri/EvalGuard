@@ -29,7 +29,7 @@ class ExperimentCreate(ApiModel):
     suite_version: str = PHASE3_SUITE_VERSION
     prompt_name: str = PROMPT_NAME
     prompt_version: str = DEFAULT_PROMPT_VERSION
-    provider: Literal["deterministic-fake"] = "deterministic-fake"
+    provider: Literal["deterministic-fake", "openai-responses"] = "deterministic-fake"
     trials: int = Field(default=1, ge=1, le=3)
     max_attempts: int = Field(default=3, ge=1, le=5)
     job_timeout_seconds: int = Field(default=30, ge=1, le=300)
@@ -41,6 +41,19 @@ class ExperimentCreate(ApiModel):
     def validate_fault_trial(self) -> Self:
         if self.fault_injection is not None and self.fault_injection.trial_number > self.trials:
             raise ValueError("fault_injection.trial_number must not exceed trials")
+        if self.provider == "openai-responses":
+            if self.trials != 1:
+                raise ValueError("openai-responses experiments are limited to one trial")
+            if self.max_attempts != 1:
+                raise ValueError(
+                    "openai-responses experiments require max_attempts=1 to prevent paid retries"
+                )
+            if self.job_timeout_seconds != 300:
+                raise ValueError("openai-responses experiments require job_timeout_seconds=300")
+            if self.fault_injection is not None:
+                raise ValueError(
+                    "deterministic fault injection is unavailable for openai-responses experiments"
+                )
         return self
 
 
@@ -90,6 +103,8 @@ class ExperimentDetail(ApiModel):
     suite_version: str
     prompt: PromptIdentityRead | None
     provider: str
+    provider_model: str | None
+    provider_config_hash: str | None
     status: str
     idempotency_key: str | None
     trials: int
@@ -127,6 +142,19 @@ class DurationMetricRead(ApiModel):
     median_ms: int | None
     p95_ms: int | None
     maximum_ms: int | None
+
+
+class ProviderUsageRead(ApiModel):
+    request_count: int
+    response_count: int
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    total_tokens: int
+    estimated_cost_usd: str | None
+    returned_models: list[str]
+    latency: DurationMetricRead
 
 
 class TimingAnalysisRead(ApiModel):
@@ -213,6 +241,8 @@ class ExperimentSummaryRead(ApiModel):
     prompt: PromptIdentityRead | None
     prompt_is_published: bool | None
     provider: str
+    provider_model: str | None
+    provider_config_hash: str | None
     trials: int
     max_attempts: int
     job_timeout_seconds: int
@@ -226,6 +256,7 @@ class ExperimentSummaryRead(ApiModel):
     quality_comparison_ready: bool
     token_usage_available: bool
     cost_available: bool
+    provider_usage: ProviderUsageRead | None
     fault_injection_present: bool
     grid_integrity: GridIntegrityRead
     execution_counts: ExecutionCountsRead
@@ -312,6 +343,7 @@ class ExecutionAttemptRead(ApiModel):
     failure_kind: str | None
     error_message: str | None
     step_count: int
+    recovery_count: int
     started_at: datetime
     lease_expires_at: datetime
     completed_at: datetime | None
@@ -319,6 +351,8 @@ class ExecutionAttemptRead(ApiModel):
 
 class ExecutionDispatchRead(ApiModel):
     generation: int
+    delivery_kind: str
+    attempt_number: int | None
     job_id: str
     status: str
     attempt_count: int
@@ -326,6 +360,37 @@ class ExecutionDispatchRead(ApiModel):
     last_attempt_at: datetime | None
     dispatched_at: datetime | None
     last_error_kind: str | None
+
+
+class ProviderTurnRead(ApiModel):
+    sequence_number: int
+    attempt_number: int
+    dispatch_generation: int
+    status: str
+    client_request_id: str
+    request_hash: str
+    request_payload: dict[str, Any]
+    provider_request_id: str | None
+    provider_response_id: str | None
+    response_model: str | None
+    response_payload: dict[str, Any] | None
+    tool_calls: list[dict[str, Any]] | None
+    tool_outputs: list[dict[str, Any]] | None
+    input_tokens: int | None
+    cached_input_tokens: int | None
+    output_tokens: int | None
+    reasoning_tokens: int | None
+    total_tokens: int | None
+    estimated_cost_usd_micros: int | None
+    latency_ms: int | None
+    retryable: bool | None
+    error_kind: str | None
+    safe_error_message: str | None
+    prepared_at: datetime
+    request_started_at: datetime | None
+    response_received_at: datetime | None
+    tools_completed_at: datetime | None
+    completed_at: datetime | None
 
 
 class CustomerRead(ApiModel):
@@ -381,6 +446,9 @@ class ExecutionDetail(ApiModel):
     experiment_id: UUID
     case_id: UUID
     case_key: str
+    provider: str
+    provider_model: str | None
+    provider_config_hash: str | None
     trial_number: int
     status: str
     attempt_count: int
@@ -403,6 +471,7 @@ class ExecutionDetail(ApiModel):
     support_tickets: list[SupportTicketRead] = Field(default_factory=list)
     attempts: list[ExecutionAttemptRead] = Field(default_factory=list)
     dispatches: list[ExecutionDispatchRead] = Field(default_factory=list)
+    provider_turns: list[ProviderTurnRead] = Field(default_factory=list)
     trace_events: list[TraceEventRead] = Field(default_factory=list)
     tool_invocations: list[ToolInvocationRead] = Field(default_factory=list)
     grader_results: list[GraderResultRead] = Field(default_factory=list)

@@ -7,10 +7,13 @@ remote-CI result is claimed. Every Phase 5 comparison is **synthetic infrastruct
 validation**:
 the fake deliberately ignores prompt wording, so it does not measure prompt/model
 quality, model latency, tokens, or cost. Phase 6's cost-free portfolio guide and
-deterministic-fake demo are locally verified. Real-provider work still requires the
-contract's separate explicit approval for credentials and possible spending.
+deterministic-fake demo are locally verified and remain fake-only. The user later
+authorized a bounded keyless real-provider implementation, which now exists with
+strict adapter contracts, durable provider turns, and scripted no-network tests.
+Its keyless local gate passed. No provider credential was available, zero paid
+calls were made, and no live-model result is claimed here.
 
-## Implemented concepts through Phase 5
+## Implemented concepts through Phase 6
 
 ### FastAPI request flow
 
@@ -130,9 +133,9 @@ contract's separate explicit approval for credentials and possible spending.
 
 The current deterministic-worker transaction is deliberately long enough to cover
 the complete local, deterministic execution. That keeps the first slice atomic and
-easy to reason about, but it would be a poor fit for a slow network model call
-because it would hold a connection and locks while waiting. A real-provider phase
-should persist shorter steps and make resume/retry behavior explicit.
+easy to reason about. The Phase 6 network executor does not reuse that boundary:
+it persists shorter provider/tool steps and makes resume versus unknown-outcome
+behavior explicit so the send never holds a database connection or execution lock.
 
 ### Alembic migrations
 
@@ -160,6 +163,14 @@ should persist shorter steps and make resume/retry behavior explicit.
   and child trial bounds are protected in PostgreSQL as well as application code.
   A clean Phase 5 database upgraded through `0008`, reported no drift, downgraded
   to `0007`, re-upgraded, and reseeded both prompt hashes before disposal.
+  Revision `20260823_0009` adds immutable real-provider model/configuration identity,
+  durable provider turns, attempt recovery counts, and attempt-versus-resume
+  dispatch identity. PostgreSQL checks and triggers protect allowed turn states,
+  state transitions, request identity, append-only tool outputs, paid-response
+  evidence, and provider/execution ownership. Its clean round-trip and drift result
+  passed: a blank database upgraded through `0009`, reported no drift, downgraded
+  to `0008`, re-upgraded, reseeded the stable two-suite/26-case/two-prompt catalog,
+  and was dropped.
 - **Why this approach:** Versioned migrations are reviewable and let schema state
   travel with code. They make deployment changes explicit rather than relying on
   ad hoc table creation.
@@ -477,6 +488,14 @@ should persist shorter steps and make resume/retry behavior explicit.
   150 raw execution links. After the compatibility, database-integrity, and grader-
   completeness regressions were added, the final tree passed all 199 tests in
   415.56 seconds with the same one known upstream warning.
+  Phase 6 adds strict keyless adapter tests plus PostgreSQL/API/RQ cases for provider
+  identity, durable transitions, single-run idempotency, provider-neutral grading,
+  isolation, usage/estimated-cost fields, unknown outcomes, malformed responses,
+  same-attempt recovery, and generation fencing. A scripted send-time lock probe
+  verifies that no execution transaction remains open. These tests make no network
+  or paid call. The final tree passed all 247 tests with the same one known upstream
+  warning; the late-response regression proves superseded evidence is retained
+  without a refund, tool invocation, tool trace, or overwrite.
 - **Why this approach:** The pyramid keeps logic failures cheap to diagnose while a
   small number of boundary-crossing tests catch wiring and lifecycle errors.
 - **Alternative and tradeoff:** Only end-to-end tests are realistic but slow and
@@ -878,40 +897,114 @@ actual worker SIGKILL, and Redis-outage recovery are recorded in `PROGRESS.md`.
 
 ## Phase 6 boundary concepts
 
-### Network calls require shorter durable steps
+### Strict Responses adapter and server-owned configuration
 
-- **Problem it solves:** The deterministic fake is local and fast, but a real model
-  request can be slow, time out after the provider accepted it, or return tool calls
-  over several turns. Holding a database transaction and execution-row lock during
-  that network wait wastes scarce connections and makes crash recovery ambiguous.
-- **How it works in EvalGuard today:** `execute_case` intentionally keeps fixture
-  creation, fake-provider work, tools, grading, and completion in one transaction.
-  Phase 4 can retry the whole rolled-back deterministic attempt. Phase 6 has not
-  inserted a network adapter into that slot. The approved design must instead
-  persist a prepared provider turn, commit, perform the network request with no
-  database transaction open, persist the response and measured usage after
-  rechecking the claim fence, execute each persisted tool request in a short local
-  transaction, and repeat until a final resolution can be graded.
-- **Why this approach:** Durable turns make resume decisions evidence-based and
-  keep network latency outside database locks. Persisting the provider response
-  before tool execution also gives retries a stable tool-call identity to replay.
-- **Alternative and tradeoff:** Calling a model inside the current transaction is
-  less code, but ties up a connection and cannot prove whether a timed-out request
-  incurred cost. Retrying an unknown provider outcome can multiply spend even when
-  database side effects roll back.
-- **Common failure modes:** Treating a client timeout as proof the provider did no
-  work, retrying a billable request without an idempotency guarantee, storing a tool
-  effect before its provider call is durable, losing the claim fence between turns,
-  logging credentials or unrestricted response data, and confusing provider
-  latency with worker duration.
-- **Interview explanation:** “Local atomicity is right for the deterministic fake,
-  but a network boundary needs a durable state machine: commit intent, call outside
-  the transaction, persist the response, then execute idempotent tools.”
+- **Problem it solves:** A generic JSON transport would let callers change the
+  model, retry policy, storage behavior, or tool schema and silently destroy the
+  meaning of a run.
+- **How it works in EvalGuard:** The adapter accepts one exact prepared request for
+  the OpenAI Responses API and `gpt-5.6-luna`. Tool arguments and the final
+  resolution use strict closed schemas: every property is required by the provider
+  schema, optional application values are represented with explicit nullability,
+  and additional properties are forbidden. The server—not request JSON—owns model,
+  reasoning, output-token limit, turn limit, timeout, `store=false`,
+  `parallel_tool_calls=false`, SDK retry count, spend ceiling, and dated prices.
+  That non-secret configuration and its canonical hash are immutable on the
+  Experiment row.
+- **Why this approach:** Reproducibility requires configuration to be evidence, not
+  process folklore. Strict schemas also fail malformed model output before it can
+  reach a tool.
+- **Alternative and tradeoff:** A flexible provider/plugin abstraction would make
+  more demos possible but would expand the validation and provenance surface before
+  there is a concrete second provider.
+- **Common failure modes:** Letting the client select an unpriced model, enabling
+  hidden SDK retries, storing provider data by default, accepting loose tool JSON,
+  or hashing a secret into experiment identity.
+- **Interview explanation:** “The provider adapter is intentionally narrow: one
+  model and one immutable request contract make every run explainable.”
 
-The separate approval gate is also an engineering control. It must name one
-provider/model, secret-delivery method, request scope, and cost ceiling before code
-uses credentials or makes a call. The portfolio guide records the current evidence
-and limitation without turning missing real-provider data into a fabricated result.
+### Durable paid-call turns keep network waits outside transactions
+
+- **Problem it solves:** A network request can be slow, time out after acceptance,
+  or return several rounds of tool calls. Holding a database transaction and row
+  lock during that wait wastes connections and makes crash recovery ambiguous.
+- **How it works in EvalGuard:** The local fake retains its simple atomic
+  provider/tool/grader transaction. The network path instead commits a
+  `ProviderTurn` in `prepared`, moves it across the send fence to
+  `request_started`, then performs the send with no open database transaction. It
+  rechecks the execution/attempt/generation fence before committing a sanitized
+  response. A tool request is already durable at that point; each tool result is
+  appended in a short transaction, and deterministic provider-neutral graders run
+  only after a structured final response is committed.
+- **Why this approach:** The database always says whether intent, send, response,
+  and each tool prefix are durable. A lock-probe integration test can acquire the
+  execution row during the scripted send, directly proving the transaction
+  boundary rather than inferring it from source layout.
+- **Alternative and tradeoff:** Calling the network inside the fake executor is
+  less code, but ties up a connection and cannot safely distinguish rollback from a
+  provider request that was already purchased.
+- **Common failure modes:** Sending before request intent commits, executing tools
+  before the response commits, logging unrestricted response text, accepting a late
+  response after fencing as authority, or calling an LLM judge instead of the
+  deterministic graders.
+- **Interview explanation:** “Commit the request, release the database, send once,
+  persist the response, then advance idempotent tools in short transactions.”
+
+### Unknown outcomes differ from safe same-attempt recovery
+
+- **Problem it solves:** “Retry” has two different meanings. A worker can crash at
+  a known durable boundary, or a request can cross the send fence and disappear
+  without a durable response. Treating both the same can repeat spend.
+- **How it works in EvalGuard:** A `request_started` turn with no response becomes
+  non-retryable `indeterminate`; a second execution pass refuses to send it again.
+  By contrast, interruption with no turn or at `prepared`, `response_received`,
+  `tools_completed`, or `final_response` schedules a newer `resume` dispatch bound
+  to the same attempt number. The attempt's origin generation remains immutable,
+  the current dispatch generation acts as the fence, and recovery is capped at
+  three resumptions. A late response after fencing is retained as `superseded`
+  evidence but cannot drive tools.
+- **Why this approach:** The recovery decision comes from durable facts. It avoids
+  pretending an ambiguous paid call did not happen while still making safe local
+  work resumable.
+- **Alternative and tradeoff:** Starting a new attempt after every worker exit is
+  simpler, but conflicts with `max_attempts=1` and can multiply network calls.
+- **Common failure modes:** Incrementing attempt count on a resume, mutating the
+  attempt's origin job identity, resending `request_started`, permitting unlimited
+  recovery generations, or discarding a late response that matters for audit.
+- **Interview explanation:** “A new dispatch generation can resume one logical
+  attempt; it never grants permission to repeat an unknown network send.”
+
+### Usage, estimated cost, and the one-run authorization fence
+
+- **Problem it solves:** Token usage, estimated price, actual billing, and permission
+  to spend are different facts but are often collapsed into one misleading number.
+- **How it works in EvalGuard:** Provider-returned token counters and returned model
+  are stored with the sanitized response. EvalGuard calculates
+  `estimated_cost_usd` from a committed 2026-08-23 per-million-token snapshot and
+  labels it as an estimate, not an invoice. Before preparing a new turn it reserves
+  conservatively against the experiment's $5 ceiling. API admission additionally
+  requires the runtime enable flag, an `Idempotency-Key`, at most 25 cases, one
+  trial, `max_attempts=1`, a 300-second job timeout, and no fault plan. A PostgreSQL
+  lock and Experiment lookup allow only one authorized real-provider experiment
+  globally; exact same-key replay converges on it.
+- **Why this approach:** Spend controls are strongest before the request exists,
+  while honest measurement preserves which values came from the provider and which
+  came from local arithmetic.
+- **Alternative and tradeoff:** Trusting the client budget or treating a price-page
+  calculation as billing is easier, but neither is an enforceable or honest result.
+- **Common failure modes:** Reporting missing usage as zero, calling estimated cost
+  measured cost, accepting two concurrent first runs, letting an idempotent replay
+  create new turns, or passing a credential through the shared Compose/API
+  environment.
+- **Interview explanation:** “Usage is provider evidence; cost is a dated estimate;
+  authorization is a database-enforced one-run boundary.”
+
+The user authorized this bounded keyless implementation, not a fabricated run.
+The key is consumed only by the worker executor and is not forwarded through the
+shared Compose application environment. No credential was available during this
+work, so zero paid calls were made. The deterministic-fake demo remains the only
+reproducible portfolio run, and any later credentialed result must be recorded as a
+separate evidence class.
 
 ## Interview questions to practice
 
@@ -981,3 +1074,15 @@ and limitation without turning missing real-provider data into a fabricated resu
     execution transaction?
 42. Which facts must be durable before and after each network provider turn so a
     worker can resume without repeating an unknown or billable outcome?
+43. Why does a safe same-attempt resume use a new dispatch generation while keeping
+    the attempt's origin generation and job identity immutable?
+44. Why is `request_started` without a response terminal and indeterminate rather
+    than retryable?
+45. Which OpenAI request settings are server-owned, and why are they part of the
+    experiment configuration hash?
+46. How do the global one-run lock, mandatory idempotency key, 25-case/one-trial
+    scope, and $5 ceiling protect different failure modes?
+47. Why is provider-returned token usage measured evidence while
+    `estimated_cost_usd` is not a billing measurement?
+48. How can a PostgreSQL lock probe demonstrate that a network wait occurs outside
+    the execution transaction?

@@ -1,9 +1,11 @@
 # EvalGuard Portfolio Guide
 
-This guide is the cost-free documentation track of Phase 6. It explains what
+This guide began as the cost-free documentation track of Phase 6. It explains what
 EvalGuard demonstrates, how to present it, how to reproduce the current evidence,
-and where its claims stop. The optional real-provider adapter and experiment remain
-separately gated by explicit approval for credentials and possible spending.
+and where its claims stop. The deterministic-fake demo remains the reproducible
+portfolio evidence. A subsequently authorized, bounded OpenAI Responses adapter is
+implemented and keylessly tested, but no credential was available, zero paid calls
+were made, and no live-model result is included.
 
 ## The 60-second project story
 
@@ -30,8 +32,13 @@ flowchart LR
     Reconciler --> RQ[Redis + RQ]
     RQ --> Worker[RQ worker]
     Worker -->|claim, generation, lease| PG
-    Worker --> Provider[Provider boundary]
-    Provider --> Tools[Four typed ParcelDesk tools]
+    Worker --> Provider{Provider boundary}
+    Provider --> Fake[Deterministic fake: one local transaction]
+    Provider --> Turn[Committed ProviderTurn request]
+    Turn -->|no DB transaction open| Network[OpenAI Responses]
+    Network --> Response[Committed sanitized response + usage]
+    Response --> Tools[Short typed tool transactions]
+    Fake --> Tools
     Tools -->|state, calls, ordered trace| PG
     Worker --> Graders[Six deterministic grader families]
     Graders -->|criterion rows + completion vector| PG
@@ -47,12 +54,18 @@ enqueue. Attempt generations fence stale delivery, leases make abandoned current
 work recoverable, and row locks plus uniqueness make repeated state changes
 converge.
 
-The provider boundary is currently exercised by `DeterministicFakeProvider` only.
-The executor still holds one transaction around its local provider/tool/grader
-path. That is intentionally simple and atomic for a local fake, but a network
-provider must not be inserted into that long transaction. The real-provider track
-must first introduce shorter durable provider/tool steps and explicit resume
-semantics.
+The reproducible demo is still exercised by `DeterministicFakeProvider` only. That
+executor holds one transaction around its local provider/tool/grader path, which is
+simple and atomic for a source-controlled fake. The bounded network path is a
+separate executor: it commits an exact request, sends once with no database
+transaction open, commits sanitized response and usage evidence, then persists one
+tool result at a time before using the same deterministic graders.
+
+The experiment stores a server-owned `gpt-5.6-luna` model/configuration hash and
+dated price snapshot. Provider turns and PostgreSQL constraints distinguish safe
+same-attempt resume from an unknown send outcome: safe committed boundaries may
+resume through a newer dispatch generation at most three times, while
+`request_started` without a response becomes non-retryable and indeterminate.
 
 ## Experiment methodology
 
@@ -100,13 +113,14 @@ resilience policy, trials, and complete grid. Fault-injected arms are not eligib
 
 Every ratio keeps its numerator and denominator. Quality deltas remain unavailable
 until both arms are terminal and fully graded. Queue, run, and end-to-end durations
-are labeled synthetic infrastructure timing, not model latency. Token use and cost
-remain unavailable rather than being represented as zero.
+for the deterministic comparison are labeled synthetic infrastructure timing, not
+model latency. Its token use and cost remain unavailable rather than being
+represented as zero.
 
-## Verified evidence through Phase 5
+## Verified deterministic evidence and Phase 6 implementation boundary
 
 The exact commands and chronological output are retained in `PROGRESS.md`. The
-most recent closure evidence is:
+Phase 5 deterministic portfolio closure evidence is:
 
 | Evidence | Verified result |
 | --- | --- |
@@ -129,6 +143,26 @@ claimed here.
 All counts above are **synthetic infrastructure validation**. They do not support a
 claim about model quality, prompt superiority, production reliability, model
 latency, token consumption, or cost.
+
+Phase 6 implementation adds strict Responses request/response normalization,
+revision `20260823_0009`, durable provider turns, a single authorized-run fence,
+same-attempt recovery, provider-neutral grading, and conditional usage/estimated-
+cost aggregation. Its tests use scripted clients and no network. The keyless Phase
+6 acceptance gate produced:
+
+| Evidence | Verified result |
+| --- | --- |
+| Locked install | `uv sync --frozen --all-groups` checked 55 packages |
+| Static checks | Ruff lint/format passed; mypy passed 37 source files |
+| Automated suite | 247 passed with one recorded upstream warning |
+| Migration | blank PostgreSQL upgraded through `20260823_0009`, no drift, downgraded to `0008`, re-upgraded, and reseeded 2 suites/26 cases/2 prompts |
+| Runtime | Compose rebuilt; API/PostgreSQL/Redis were healthy and the worker remained running |
+| Fake smoke | API returned `202`; one RQ execution completed with one refund, two expected tools, seven trace events, and 4/4 passing criteria |
+| Safety gates | same-key replay converged; disabled real submission returned `403`; Redis down kept liveness `200`, changed readiness to `503`, and recovery restored `200` |
+| Provider boundary | both supported credential-presence checks were false; zero paid calls and no live-model result |
+
+These results prove the bounded adapter and recovery machinery locally without
+turning keyless tests into a live OpenAI result.
 
 ## Reproducible demo
 
@@ -202,6 +236,9 @@ execution links and point out:
 | `src/evalguard/workers/dispatch.py` | durable outbox publication and exact RQ identity checking |
 | `src/evalguard/workers/jobs.py` | attempt claims, retry classification, leases, and recovery |
 | `src/evalguard/evaluation/executor.py` | fixture isolation, provider/tool orchestration, evidence collection, and deterministic grading |
+| `src/evalguard/evaluation/real_executor.py` | exact paid-call boundaries, turn persistence, claim fencing, short tool transactions, and final grading |
+| `src/evalguard/providers/openai_responses.py` | strict Responses schemas, retry-free transport, normalization, and redacted failures |
+| `src/evalguard/providers/configuration.py` | server-owned Luna request identity, price snapshot, configuration hash, and estimated cost |
 | `src/evalguard/domain/tools.py` | typed business rules, actor scope, transaction locks, exact replay, and semantic convergence |
 | `src/evalguard/evaluation/grader.py` | independent state/trace/policy/authorization/escalation/resolution criteria |
 | `src/evalguard/evaluation/analysis.py` | non-vacuous pass, complete-grid checks, stability vectors, and compatible comparison |
@@ -210,15 +247,19 @@ execution links and point out:
 
 ## Honest limitations
 
-- The only executed provider is deterministic and source controlled. No real model
-  quality has been measured.
+- The only provider executed for portfolio evidence is deterministic and source
+  controlled. The network adapter exists, but no credentialed call or real-model
+  quality measurement has occurred.
 - The fake follows the case plan and ignores prompt semantics, so its zero prompt
   delta is expected.
-- Token usage and model cost are not currently stored or reported.
+- Deterministic-fake token usage and model cost remain unavailable. The real path
+  can store provider-returned usage and a dated price-snapshot estimate, but no live
+  values exist; estimated cost would not be provider billing.
 - Current run timing includes worker/application/database work and is not isolated
   model latency.
-- The local fake execution is one atomic database transaction. A network call would
-  hold resources too long; the real-provider track needs shorter durable steps.
+- The local fake execution remains one atomic database transaction. The separate
+  network executor uses durable turn and short tool transactions; that design is
+  keylessly tested, not live-provider validated.
 - There is one modular application, one RQ queue, and local Docker Compose. The
   project makes no cloud-scale, multi-tenant, or production-SLA claim.
 - Primary rules are deterministic. Subjective response style is intentionally not
@@ -244,21 +285,35 @@ infrastructure and evidence discipline.
   the exact case/trial grid and raw evidence remain retrievable.
 - **Honest measurement:** Missing criteria do not pass, incomplete arms do not get
   deltas, fake timing is labeled, and missing token/cost values are not fabricated.
+- **Ambiguous-call safety:** Exact intent commits before send; an unknown outcome is
+  never resent, while safe committed boundaries resume the same attempt under a new
+  generation fence.
 
-## Real-provider approval gate and result record
+## Bounded real-provider implementation and unfilled result record
 
-Starting Phase 6 does not authorize credentials or spend. Before the real-provider
-track begins, record explicit approval of:
+The user advanced the remaining milestone on 2026-08-23 and authorized the bounded
+keyless implementation. EvalGuard translates that authorization into database and
+configuration fences:
 
-- exactly one provider and model;
-- how the credential will be supplied without entering Git or logs;
-- a maximum request and monetary budget;
-- the selected suite/prompt/trial scope; and
-- whether provider terms permit retaining the response/tool evidence required by
-  this project.
+- exactly one globally admitted, idempotency-keyed real-provider experiment;
+- OpenAI Responses with server-owned `gpt-5.6-luna` configuration;
+- at most 25 cases, one trial, one execution attempt, six provider turns, and no
+  deterministic fault plan;
+- one network attempt per turn, SDK retries disabled, `store=false`, and parallel
+  tool calls disabled;
+- a conservative $5 experiment ceiling checked before a new request is prepared;
+  and
+- an `EVALGUARD_OPENAI_API_KEY` consumed only by the worker executor and not passed
+  through the shared Compose/API environment.
 
-After an approved run, add a separate record containing provider/model, relevant
+No such credential was available during implementation. Zero paid calls were made,
+so there is no experiment ID, raw live response, measured model-quality result,
+provider invoice, or live latency to report. Scripted adapter/state-machine tests
+are engineering evidence, not a substitute for those fields.
+
+After any later credentialed run, add a separate record containing provider/model,
 configuration, date, code revision, suite and prompt hashes, trial count, exact
 command, experiment IDs, raw evidence location, measured usage source, measured
-cost source, and limitations. Never merge real-provider results with the
+latency source, price-snapshot estimate, any separately observed billing source,
+and limitations. Never merge real-provider results with the
 deterministic-fake evidence table.

@@ -57,14 +57,26 @@ ParcelDesk support domain.
   Implementation commit `c481ed4` and documentation commit `270bbe4` record the
   verified milestone and are published on `origin/main`. No Phase 5 remote-CI
   result is claimed.
-- The user explicitly advanced Phase 6 on 2026-08-22. Its cost-free portfolio
-  documentation and reproducible deterministic-fake demo are locally verified.
-  The demo completed two new 75-execution arms, the full 199-test suite passed, and
-  exact results are recorded in `PROGRESS.md`. Local commit `5a058e0` records that
-  cost-free slice and remains unpushed. Do not add or invoke a real-provider adapter,
-  read or use provider credentials, or incur possible spending until the user gives
-  the separate explicit approval required by the original product contract. Phase 6
-  authorization by itself is not that approval.
+- The Phase 6 cost-free portfolio documentation and reproducible deterministic-fake
+  demo are locally verified. The demo completed two new 75-execution arms, the full
+  199-test suite passed, and exact results are recorded in `PROGRESS.md`. Portfolio
+  commits `5a058e0` and `31a4192` are published on `origin/main`; no remote-CI
+  result is inferred from that publication.
+- On 2026-08-23 the user explicitly advanced the remaining Phase 6 milestone and
+  authorized its bounded, keyless implementation. The implemented track selects
+  the OpenAI Responses API with server-owned `gpt-5.6-luna` configuration and
+  permits exactly one idempotency-keyed real-provider experiment, at most 25 cases,
+  one trial, one execution attempt, no deterministic fault injection, and a
+  conservative $5 experiment ceiling. The deterministic fake remains the default
+  and credential-free CI path. Neither `EVALGUARD_OPENAI_API_KEY` nor
+  `OPENAI_API_KEY` was available during implementation, so zero paid calls were
+  made and no live-provider result is claimed. The keyless implementation passed
+  locked dependency/static checks, all 247 tests—including PostgreSQL, Redis, RQ,
+  API, and provider coverage—a clean `20260823_0009` round trip with no drift,
+  rebuilt Compose startup, a live deterministic-fake API/worker smoke, idempotent
+  replay, and Redis readiness outage/recovery. Exact local results are in
+  `PROGRESS.md`; publication evidence must be appended only after the requested
+  push succeeds.
 
 ## Engineering rules
 
@@ -177,10 +189,23 @@ ParcelDesk support domain.
   unavailable—not zero—until a provider actually records them, and label derived
   fake-provider timings as synthetic infrastructure timing rather than model
   latency.
+- A real-provider experiment stores one immutable, non-secret provider model,
+  request configuration, configuration hash, and dated price snapshot. Its exact
+  prepared request is committed before the network send; the send occurs without
+  an open database transaction; the sanitized purchased response is committed
+  before any tool output; and each tool result advances an append-only persisted
+  prefix in a short transaction. Provider-returned token usage is measured evidence,
+  while USD cost is a clearly labeled estimate derived from the committed price
+  snapshot rather than provider billing.
+- Treat a provider request that crossed the send fence without a durable response as
+  non-retryable and indeterminate. Worker interruption at a safe durable boundary
+  may resume the same logical execution attempt through a new dispatch generation,
+  never a new paid attempt, and is bounded to three resumptions. Preserve late
+  responses as superseded evidence without allowing stale business effects.
 
 ## Required verification
 
-Phase 5 completed the following local gate. Preserve its exact evidence in
+Phases 5 and 6 completed the applicable keyless local gate below. Preserve exact evidence in
 `PROGRESS.md`, and rerun the applicable items before any later completion claim
 whose changes could affect them:
 
@@ -252,10 +277,16 @@ whose changes could affect them:
 27. The Phase 6 cost-free portfolio demo must be syntax-checked and exercised
     against the packaged application; its exact result and synthetic limitation
     must be recorded before that documentation slice is called complete.
-28. Any later real-provider implementation must retain credential-free CI, add
+28. The Phase 6 real-provider implementation must retain credential-free CI, add
     deterministic adapter/state-machine tests without paid calls, verify network
     waits occur outside database transactions, and run a paid/credentialed smoke
-    only inside the separately approved provider/model and cost boundary.
+    only inside the approved provider/model and cost boundary.
+29. Phase 6 local acceptance must verify revision `20260823_0009`, immutable
+    provider identity and turn-state constraints, exact single-run idempotency,
+    safe same-attempt recovery, unknown-outcome terminalization, provider-neutral
+    grading, usage and estimated-cost aggregation, PostgreSQL state isolation, and
+    API/RQ integration without making a paid call. A credentialed smoke remains a
+    distinct unchecked item until a worker-only credential is actually available.
 
 Do not claim the milestone is complete while any acceptance item in `PLAN.md` is
 unchecked or unverified.
@@ -288,5 +319,7 @@ unchecked or unverified.
   resume metrics.
 - Label fake-provider output as **synthetic infrastructure validation**, never as
   real-model quality or performance.
-- A real provider remains out of scope until the user approves credentials and
-  possible cost; clearly distinguish any later real-provider results.
+- The bounded real-provider implementation is approved, but a paid invocation must
+  still remain inside the one-run/model/request/cost fence and requires an actually
+  available worker-only credential. Clearly distinguish keyless adapter validation,
+  any later live-provider result, and deterministic-fake infrastructure evidence.

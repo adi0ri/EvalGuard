@@ -1135,3 +1135,146 @@ ahead of `origin/main`, which remains at the requested Phase 5 publication commi
 `270bbe4`. The Phase 6 commit is intentionally unpushed, and no remote-CI result is
 claimed. The separately approved real-provider track remains the next unchecked
 work.
+
+## Phase 6 bounded-provider authorization and design — 2026-08-23
+
+The user directed EvalGuard to finish all phases, push the result, and not ask
+again. Decision D027 treats that as authorization to complete the bounded keyless
+implementation while retaining the separate safety boundary around a billable
+request. Presence-only checks found neither `EVALGUARD_OPENAI_API_KEY` nor
+`OPENAI_API_KEY` on the host. The rebuilt API and worker containers also reported
+`False` without printing a value. Consequently zero paid calls were made and no
+live-provider result exists.
+
+First-party OpenAI Responses, GPT-5.6 Luna, model, and Structured Outputs
+documentation was reviewed before implementation. The server-owned track pins
+`openai-responses` with `gpt-5.6-luna`, reasoning `none`, 1,200 maximum output
+tokens, six turns, a 45-second per-turn timeout, zero SDK retries, one network
+attempt per turn, `store=false`, and `parallel_tool_calls=false`. It permits one
+idempotency-keyed experiment globally, at most 25 cases, one trial, one logical
+attempt, a 300-second job timeout, no deterministic fault injection, and a
+conservative $5 estimated-cost ceiling. The immutable price snapshot dated
+2026-08-23 is input $0.20/M, cached input $0.02/M, and output $1.20/M. Calculated
+USD is labeled estimated rather than provider billing.
+
+## Phase 6 implementation — 2026-08-23
+
+- `pyproject.toml` and `uv.lock` add OpenAI SDK 2.54.0 while retaining the
+  credential-free deterministic fake as the default and CI provider.
+- Revision `20260823_0009` adds immutable experiment provider identity, a partial
+  unique one-real-experiment fence, provider-turn request/response/tool/usage
+  evidence, append-only database triggers, recovery counts, and attempt-versus-
+  resume dispatch identity.
+- The adapter locally validates exact strict tool/final schemas before crossing
+  the send fence, disables SDK retries/storage/parallel tools, normalizes only
+  bounded safe response fields, redacts transport errors, and rejects a returned
+  model outside the approved identity.
+- The real executor commits the request before network I/O, holds no database
+  transaction during the scripted send, commits purchased response evidence
+  before tools, and advances each durable tool output in a short transaction.
+  Unknown send outcomes are terminal and never resent. Safe worker recovery
+  resumes the same attempt through a new dispatch generation at most three times.
+- API retrieval exposes immutable provider identity and ordered turns. Summary and
+  comparison paths expose available provider usage, client-observed latency, and
+  price-snapshot estimates without turning missing values into zero.
+- Provider-neutral grading retains exact typed semantics, policy, authorization,
+  state, trace, and structured-resolution checks while removing fake-only injected
+  retry/duplicate choreography from real-provider scoring.
+
+The final review found and corrected these material issues before acceptance:
+
+1. JSONB object validation originally depended on key iteration order; it now
+   checks the complete key set and has a reordered-object regression.
+2. Usage relations and PostgreSQL integer bounds are validated before persistence;
+   pricing comes from the immutable experiment snapshot.
+3. Returned-model mismatch retains evidence and usage but blocks tool effects and
+   cost attribution. Only the exact alias or its dated form is accepted.
+4. Request validation and hashing complete before `request_started`; strict schema
+   validation rejects unsupported `allOf`/`oneOf`, and identifiers match database
+   length bounds.
+5. PostgreSQL advisory locking plus the partial unique index enforces the single
+   real experiment. Comparison requires identical nonempty returned-model sets.
+6. Provider-neutral duplicate/recovery cases use semantic expectations rather than
+   demanding fake-only replays or repeated state changes.
+7. A fenced `request_started` turn that returns late now transitions from
+   `indeterminate` to immutable `superseded` evidence. A PostgreSQL regression
+   proves usage/cost evidence survives, a conflicting second persistence cannot
+   overwrite it, and no refund, tool invocation, tool trace, or business effect is
+   created.
+
+## Phase 6 failures observed and corrected — 2026-08-23
+
+No failed command was relabeled as a pass:
+
+- The first combined Phase 6 run reported three failures and two fixture errors.
+  The failures exposed the JSONB key-order assumption; the errors came from
+  running PostgreSQL suites concurrently against the same resettable test
+  database. The validator was fixed, and database tests were then run serially.
+- An early full run reached 225 passes and one failure because an old RQ regression
+  mutated an experiment's now-immutable provider identity. The test now injects
+  the intended executor failure without weakening the production invariant.
+- The first disposable migration downgrade found that an intermediate migration
+  edit had not created the final index in that temporary schema. The still-new
+  revision was corrected with the final index and a defensive downgrade; the
+  subsequent clean round trip and drift checks passed.
+- After the final image rebuild, the persistent development database—already at
+  the earlier uncommitted form of `0009`—reported only the final partial unique
+  index as drift. `CREATE UNIQUE INDEX IF NOT EXISTS` added that schema object
+  without deleting or rewriting rows, after which `uv run alembic check` reported
+  no new operations. Fresh databases already receive the index from `0009`.
+- One focused format check identified a line wrap in the late-response regression;
+  formatting corrected it and the configured checks passed.
+- A combined Redis stop/probe/start shell request was rejected by command safety
+  before execution. The explicit stop, probe, start, and recovery checks were run
+  as separate commands and passed.
+
+## Phase 6 final keyless verification — 2026-08-23
+
+The exact final-tree results were:
+
+| Command or gate | Exact observed result |
+| --- | --- |
+| `uv sync --frozen --all-groups` | `Checked 55 packages in 14ms`. |
+| `uv run ruff check .` | `All checks passed!`. |
+| `uv run ruff format --check .` | `83 files already formatted`. |
+| `uv run mypy` | `Success: no issues found in 37 source files`. |
+| Late-response regression | `1 passed, 1 warning in 4.67s`. |
+| Phase 6 real-provider integration file | `11 passed, 1 warning in 17.96s`. |
+| `uv run pytest` | `247 passed, 1 warning in 240.12s (0:04:00)`. |
+| `docker compose config --quiet` | Exited 0 with no output. |
+| `docker compose up --build --wait` | Exited 0; rebuilt `evalguard:local`, completed migration/test-database one-shots, started API/worker, and reached healthy PostgreSQL/Redis/API plus a running worker. |
+| Container revision | PostgreSQL reported `20260823_0009`. |
+| `uv run alembic check` | `No new upgrade operations detected.` after the persistent-development schema reconciliation described above. |
+| High-confidence secret scan | `high_confidence_secret_match_files=0`. |
+| `git diff --check` | No whitespace errors; only expected LF-to-CRLF working-copy notices. |
+
+The disposable database `evalguard_phase6_final_20260823` upgraded from base
+through `20260823_0009`, reported no drift, downgraded to `20260822_0008`,
+re-upgraded to head, reported no drift again, and was dropped. Repeated seeding
+remained stable at two suites, 26 total cases, and two prompts. The immutable suite
+hashes remained
+`aaedf653770166eb7e967352b9242509a94dd9ba3e4ee833576617c403ec6abd`
+for v1 and
+`28289cfdcd98be852b00e451b2f52ae8a9af65a454a6642bb96acb4991a19782`
+for v2; prompt hashes remained
+`08724bf556610d9563f27189eb5b298e62a1ce57952885f481c5f8cf93f5ab69`
+and
+`f93d1378329f1156219063cebabfde0cd65e44d08c382541ed600c05140038ad`.
+
+The final rebuilt-image deterministic smoke returned liveness/readiness `200` and
+submission `202`. Experiment `32ec7383-f6ed-478a-bfe0-7bd7a0727e64` completed
+execution `b22329b2-906c-43b9-8902-21671683065a` in one attempt with one refund,
+`lookup_order` then `issue_refund`, seven trace events, and 4/4 passing deterministic
+criteria. Provider-turn count was correctly zero for the fake provider. Same-key
+replay returned the same experiment and one execution. A separately submitted
+`openai-responses` intent returned `403` with the gate disabled before network
+work. With Redis stopped, liveness stayed `200` and readiness returned `503`;
+after restart, Redis became healthy, readiness returned `200`, and the worker
+reconnected without replacement.
+
+Every runtime result in this section is either keyless implementation validation
+or **synthetic infrastructure validation**. It is not OpenAI model-quality,
+provider-latency, token, or billing evidence. The Phase 6 implementation/local
+acceptance gate is complete. The credentialed experiment remains unchecked and
+externally blocked because no worker-only credential is available; zero paid calls
+were made. Git commits and requested publication are the next actions.

@@ -278,6 +278,7 @@ class ToolRuntime:
                 status=order.status,
                 total_cents=order.total_cents,
                 currency=order.currency,
+                delivered_at=order.delivered_at,
             )
         except ToolExecutionError as exc:
             self._fail_invocation(invocation, exc)

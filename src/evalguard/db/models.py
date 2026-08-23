@@ -17,6 +17,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
@@ -104,6 +105,37 @@ class Experiment(Base):
         UniqueConstraint("idempotency_key", name="uq_experiments_idempotency_key"),
         Index("ix_experiments_suite_status", "suite_id", "status"),
         Index("ix_experiments_agent_prompt_id", "agent_prompt_id"),
+        Index(
+            "ix_experiments_provider_identity",
+            "provider",
+            "provider_model",
+            "provider_config_hash",
+        ),
+        Index(
+            "uq_experiments_single_openai_run",
+            "provider",
+            unique=True,
+            postgresql_where=text("provider = 'openai-responses'"),
+        ),
+        CheckConstraint(
+            "(provider = 'deterministic-fake' AND provider_model IS NULL "
+            "AND provider_config IS NULL AND provider_config_hash IS NULL) OR "
+            "(provider = 'openai-responses' AND provider_model IS NOT NULL "
+            "AND provider_config IS NOT NULL AND provider_config_hash IS NOT NULL)",
+            name="provider_identity_complete",
+        ),
+        CheckConstraint(
+            "provider_model IS NULL OR char_length(provider_model) > 0",
+            name="provider_model_nonempty",
+        ),
+        CheckConstraint(
+            "provider_config IS NULL OR jsonb_typeof(provider_config) = 'object'",
+            name="provider_config_object",
+        ),
+        CheckConstraint(
+            "provider_config_hash IS NULL OR provider_config_hash ~ '^[0-9a-f]{64}$'",
+            name="provider_config_hash_format",
+        ),
         CheckConstraint(
             "trials BETWEEN 1 AND 3",
             name="trials_range",
@@ -138,6 +170,11 @@ class Experiment(Base):
         nullable=True,
     )
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
+    provider_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    provider_config: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    provider_config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
     trials: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -232,12 +269,19 @@ class ExecutionAttempt(Base):
             name="dispatch_generation_positive",
         ),
         CheckConstraint(
-            "status IN ('running', 'succeeded', 'retry_scheduled', 'failed', 'interrupted')",
+            "status IN ("
+            "'running', 'succeeded', 'retry_scheduled', 'resume_scheduled', "
+            "'failed', 'interrupted'"
+            ")",
             name="status_allowed",
         ),
         CheckConstraint(
             "step_count >= 0",
             name="step_count_nonnegative",
+        ),
+        CheckConstraint(
+            "recovery_count >= 0",
+            name="recovery_count_nonnegative",
         ),
     )
 
@@ -255,6 +299,7 @@ class ExecutionAttempt(Base):
     failure_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    recovery_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
@@ -262,9 +307,319 @@ class ExecutionAttempt(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ProviderTurn(Base):
+    """Durable boundary around one real-provider network turn.
+
+    A prepared row is committed before the network call. The raw response and its
+    normalized tool calls are then persisted before any tool is executed, so a
+    recovered worker can continue from database evidence rather than repeat the
+    provider request.
+    """
+
+    __tablename__ = "provider_turns"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["case_execution_id", "attempt_number"],
+            ["execution_attempts.case_execution_id", "execution_attempts.attempt_number"],
+            name="fk_provider_turns_execution_attempt",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "case_execution_id",
+            "sequence_number",
+            name="uq_provider_turns_execution_sequence",
+        ),
+        UniqueConstraint(
+            "client_request_id",
+            name="uq_provider_turns_client_request_id",
+        ),
+        Index(
+            "ix_provider_turns_execution_attempt",
+            "case_execution_id",
+            "attempt_number",
+            "dispatch_generation",
+        ),
+        Index(
+            "ix_provider_turns_status_prepared_at",
+            "status",
+            "prepared_at",
+        ),
+        Index(
+            "uq_provider_turns_execution_open",
+            "case_execution_id",
+            unique=True,
+            postgresql_where=text("status IN ('prepared', 'request_started', 'response_received')"),
+        ),
+        CheckConstraint(
+            "attempt_number >= 1",
+            name="attempt_number_positive",
+        ),
+        CheckConstraint(
+            "dispatch_generation >= 1",
+            name="dispatch_generation_positive",
+        ),
+        CheckConstraint(
+            "sequence_number >= 1",
+            name="sequence_number_positive",
+        ),
+        CheckConstraint(
+            "status IN ("
+            "'prepared', 'request_started', 'response_received', 'tools_completed', "
+            "'final_response', 'response_invalid', 'failed', 'indeterminate', 'superseded'"
+            ")",
+            name="status_allowed",
+        ),
+        CheckConstraint(
+            "char_length(client_request_id) > 0",
+            name="client_request_id_nonempty",
+        ),
+        CheckConstraint(
+            "request_hash ~ '^[0-9a-f]{64}$'",
+            name="request_hash_format",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(request_payload) = 'object'",
+            name="request_payload_object",
+        ),
+        CheckConstraint(
+            "response_payload IS NULL OR jsonb_typeof(response_payload) = 'object'",
+            name="response_payload_object",
+        ),
+        CheckConstraint(
+            "tool_calls IS NULL OR jsonb_typeof(tool_calls) = 'array'",
+            name="tool_calls_array",
+        ),
+        CheckConstraint(
+            "tool_outputs IS NULL OR jsonb_typeof(tool_outputs) = 'array'",
+            name="tool_outputs_array",
+        ),
+        CheckConstraint(
+            "provider_request_id IS NULL OR char_length(provider_request_id) > 0",
+            name="provider_request_id_nonempty",
+        ),
+        CheckConstraint(
+            "provider_response_id IS NULL OR char_length(provider_response_id) > 0",
+            name="provider_response_id_nonempty",
+        ),
+        CheckConstraint(
+            "response_model IS NULL OR char_length(response_model) > 0",
+            name="response_model_nonempty",
+        ),
+        CheckConstraint(
+            "error_kind IS NULL OR char_length(error_kind) > 0",
+            name="error_kind_nonempty",
+        ),
+        CheckConstraint(
+            "input_tokens IS NULL OR input_tokens >= 0",
+            name="input_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "cached_input_tokens IS NULL OR cached_input_tokens >= 0",
+            name="cached_input_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "output_tokens IS NULL OR output_tokens >= 0",
+            name="output_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "reasoning_tokens IS NULL OR reasoning_tokens >= 0",
+            name="reasoning_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "total_tokens IS NULL OR total_tokens >= 0",
+            name="total_tokens_nonnegative",
+        ),
+        CheckConstraint(
+            "cached_input_tokens IS NULL OR input_tokens IS NULL "
+            "OR cached_input_tokens <= input_tokens",
+            name="cached_input_tokens_bounded",
+        ),
+        CheckConstraint(
+            "reasoning_tokens IS NULL OR output_tokens IS NULL "
+            "OR reasoning_tokens <= output_tokens",
+            name="reasoning_tokens_bounded",
+        ),
+        CheckConstraint(
+            "total_tokens IS NULL OR input_tokens IS NULL OR output_tokens IS NULL "
+            "OR total_tokens >= input_tokens + output_tokens",
+            name="total_tokens_bounded",
+        ),
+        CheckConstraint(
+            "estimated_cost_usd_micros IS NULL OR estimated_cost_usd_micros >= 0",
+            name="estimated_cost_usd_micros_nonnegative",
+        ),
+        CheckConstraint(
+            "latency_ms IS NULL OR latency_ms >= 0",
+            name="latency_ms_nonnegative",
+        ),
+        CheckConstraint(
+            "http_status_code IS NULL OR http_status_code BETWEEN 100 AND 599",
+            name="http_status_code_range",
+        ),
+        CheckConstraint(
+            "response_payload IS NULL OR http_status_code IS NULL "
+            "OR http_status_code BETWEEN 200 AND 299",
+            name="response_http_success",
+        ),
+        CheckConstraint(
+            "(input_tokens IS NULL AND cached_input_tokens IS NULL "
+            "AND output_tokens IS NULL AND reasoning_tokens IS NULL "
+            "AND total_tokens IS NULL AND estimated_cost_usd_micros IS NULL) "
+            "OR response_payload IS NOT NULL",
+            name="usage_requires_response",
+        ),
+        CheckConstraint(
+            "(status = 'prepared' "
+            "AND provider_request_id IS NULL AND provider_response_id IS NULL "
+            "AND response_model IS NULL AND response_payload IS NULL "
+            "AND tool_calls IS NULL AND tool_outputs IS NULL "
+            "AND input_tokens IS NULL AND cached_input_tokens IS NULL "
+            "AND output_tokens IS NULL AND reasoning_tokens IS NULL "
+            "AND total_tokens IS NULL AND estimated_cost_usd_micros IS NULL "
+            "AND latency_ms IS NULL AND http_status_code IS NULL "
+            "AND retryable IS NULL AND error_kind IS NULL "
+            "AND safe_error_message IS NULL AND request_started_at IS NULL "
+            "AND response_received_at IS NULL "
+            "AND tools_completed_at IS NULL AND completed_at IS NULL) "
+            "OR (status = 'request_started' "
+            "AND provider_request_id IS NULL AND provider_response_id IS NULL "
+            "AND response_model IS NULL AND response_payload IS NULL "
+            "AND tool_calls IS NULL AND tool_outputs IS NULL "
+            "AND input_tokens IS NULL AND cached_input_tokens IS NULL "
+            "AND output_tokens IS NULL AND reasoning_tokens IS NULL "
+            "AND total_tokens IS NULL AND estimated_cost_usd_micros IS NULL "
+            "AND latency_ms IS NULL AND http_status_code IS NULL "
+            "AND retryable IS NULL AND error_kind IS NULL "
+            "AND safe_error_message IS NULL AND request_started_at IS NOT NULL "
+            "AND response_received_at IS NULL "
+            "AND tools_completed_at IS NULL AND completed_at IS NULL) "
+            "OR (status = 'response_received' "
+            "AND provider_response_id IS NOT NULL AND response_model IS NOT NULL "
+            "AND response_payload IS NOT NULL AND request_started_at IS NOT NULL "
+            "AND response_received_at IS NOT NULL "
+            "AND tool_calls IS NOT NULL AND jsonb_array_length(tool_calls) > 0 "
+            "AND tool_outputs IS NOT NULL "
+            "AND jsonb_array_length(tool_outputs) <= jsonb_array_length(tool_calls) "
+            "AND retryable IS NULL AND error_kind IS NULL "
+            "AND safe_error_message IS NULL AND tools_completed_at IS NULL "
+            "AND completed_at IS NULL) "
+            "OR (status = 'tools_completed' "
+            "AND provider_response_id IS NOT NULL AND response_model IS NOT NULL "
+            "AND response_payload IS NOT NULL AND request_started_at IS NOT NULL "
+            "AND response_received_at IS NOT NULL "
+            "AND tool_calls IS NOT NULL AND jsonb_array_length(tool_calls) > 0 "
+            "AND tool_outputs IS NOT NULL "
+            "AND jsonb_array_length(tool_outputs) = jsonb_array_length(tool_calls) "
+            "AND retryable IS NULL AND error_kind IS NULL "
+            "AND safe_error_message IS NULL AND tools_completed_at IS NOT NULL "
+            "AND completed_at IS NOT NULL) "
+            "OR (status = 'final_response' "
+            "AND provider_response_id IS NOT NULL AND response_model IS NOT NULL "
+            "AND response_payload IS NOT NULL AND request_started_at IS NOT NULL "
+            "AND response_received_at IS NOT NULL "
+            "AND tool_calls IS NOT NULL AND jsonb_array_length(tool_calls) = 0 "
+            "AND tool_outputs IS NULL AND retryable IS NULL AND error_kind IS NULL "
+            "AND safe_error_message IS NULL AND tools_completed_at IS NULL "
+            "AND completed_at IS NOT NULL) "
+            "OR (status = 'response_invalid' "
+            "AND response_payload IS NOT NULL AND request_started_at IS NOT NULL "
+            "AND response_received_at IS NOT NULL "
+            "AND tool_outputs IS NULL AND retryable = FALSE AND error_kind IS NOT NULL "
+            "AND safe_error_message IS NOT NULL AND tools_completed_at IS NULL "
+            "AND completed_at IS NOT NULL) "
+            "OR (status IN ('failed', 'indeterminate') "
+            "AND provider_response_id IS NULL AND response_model IS NULL "
+            "AND response_payload IS NULL AND tool_calls IS NULL AND tool_outputs IS NULL "
+            "AND input_tokens IS NULL AND cached_input_tokens IS NULL "
+            "AND output_tokens IS NULL AND reasoning_tokens IS NULL "
+            "AND total_tokens IS NULL AND estimated_cost_usd_micros IS NULL "
+            "AND retryable IS NOT NULL AND error_kind IS NOT NULL "
+            "AND safe_error_message IS NOT NULL AND request_started_at IS NOT NULL "
+            "AND response_received_at IS NULL "
+            "AND tools_completed_at IS NULL AND completed_at IS NOT NULL) "
+            "OR (status = 'superseded' "
+            "AND tools_completed_at IS NULL AND completed_at IS NOT NULL "
+            "AND ((provider_response_id IS NULL AND response_model IS NULL "
+            "AND response_payload IS NULL AND tool_calls IS NULL "
+            "AND tool_outputs IS NULL AND input_tokens IS NULL "
+            "AND cached_input_tokens IS NULL AND output_tokens IS NULL "
+            "AND reasoning_tokens IS NULL AND total_tokens IS NULL "
+            "AND estimated_cost_usd_micros IS NULL AND latency_ms IS NULL "
+            "AND http_status_code IS NULL AND provider_request_id IS NULL "
+            "AND retryable IS NULL AND error_kind IS NULL "
+            "AND safe_error_message IS NULL "
+            "AND request_started_at IS NULL AND response_received_at IS NULL) "
+            "OR (response_payload IS NOT NULL AND tool_calls IS NOT NULL "
+            "AND tool_outputs IS NOT NULL "
+            "AND jsonb_array_length(tool_outputs) <= jsonb_array_length(tool_calls) "
+            "AND ((retryable IS NULL AND error_kind IS NULL "
+            "AND safe_error_message IS NULL) "
+            "OR (retryable IS NOT NULL AND error_kind IS NOT NULL "
+            "AND safe_error_message IS NOT NULL)) "
+            "AND request_started_at IS NOT NULL AND response_received_at IS NOT NULL)))",
+            name="state_coherent",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    case_execution_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        nullable=False,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    dispatch_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    sequence_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="prepared")
+    client_request_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    provider_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider_response_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    response_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    response_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    tool_calls: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    tool_outputs: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_cost_usd_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    http_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    error_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    safe_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prepared_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    request_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    response_received_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    tools_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class ExecutionDispatch(Base):
     __tablename__ = "execution_dispatches"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["case_execution_id", "attempt_number"],
+            ["execution_attempts.case_execution_id", "execution_attempts.attempt_number"],
+            name="fk_execution_dispatches_execution_attempt",
+            ondelete="CASCADE",
+        ),
         UniqueConstraint(
             "case_execution_id",
             "generation",
@@ -275,6 +630,11 @@ class ExecutionDispatch(Base):
             "ix_execution_dispatches_due",
             "status",
             "available_at",
+        ),
+        Index(
+            "ix_execution_dispatches_execution_attempt",
+            "case_execution_id",
+            "attempt_number",
         ),
         CheckConstraint(
             "generation >= 1",
@@ -288,6 +648,19 @@ class ExecutionDispatch(Base):
             "attempt_count >= 0",
             name="attempt_count_nonnegative",
         ),
+        CheckConstraint(
+            "delivery_kind IN ('attempt', 'resume')",
+            name="delivery_kind_allowed",
+        ),
+        CheckConstraint(
+            "attempt_number IS NULL OR attempt_number >= 1",
+            name="attempt_number_positive",
+        ),
+        CheckConstraint(
+            "(delivery_kind = 'attempt' AND attempt_number IS NULL) OR "
+            "(delivery_kind = 'resume' AND attempt_number IS NOT NULL)",
+            name="delivery_identity_coherent",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -298,6 +671,8 @@ class ExecutionDispatch(Base):
     )
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     job_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    delivery_kind: Mapped[str] = mapped_column(String(20), nullable=False, default="attempt")
+    attempt_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

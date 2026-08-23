@@ -2,7 +2,7 @@
 
 ## Independent origin statement
 
-All Phase 0–5 ParcelDesk domain material was independently created for this
+All Phase 0–6 EvalGuard and ParcelDesk material was independently created for this
 portfolio project. ParcelDesk is a wholly fictional business. Its prompts,
 scenario, customer/order/address fixtures, support tickets, escalation reasons,
 tool behavior, grader criteria, policies, traces, labels, and result wording are
@@ -46,6 +46,13 @@ authored from EvalGuard's committed implementation and recorded evidence. They a
 no domain case, dataset, prompt, provider output, benchmark, or external report
 template. The script selects only the in-repository deterministic fake.
 
+Phase 6's Responses adapter, immutable configuration, provider-turn ledger,
+recovery rules, provider-neutral grading rules, and scripted provider fixtures were
+also independently authored for EvalGuard. Scripted response objects are test
+infrastructure, not OpenAI output or model-quality evidence. The implementation
+does not incorporate an external benchmark, support corpus, provider example
+prompt, or private operational design.
+
 No proprietary material from any employer or other private source was used. This
 project must not copy, reconstruct, imitate, or include employer code, prompts,
 policies, task wording, scenarios, graders, traces, labels, datasets, architecture,
@@ -75,6 +82,7 @@ Transitive packages remain recorded in that lockfile rather than duplicated here
 | redis-py | 6.4.0 | Redis connections and readiness checks |
 | RQ | 2.11.0 | Redis-backed job queue and worker |
 | Jinja2 | 3.1.6 | Autoescaped server-rendered Phase 5 comparison report |
+| OpenAI Python SDK | 2.54.0 | Retry-disabled Responses transport for the optional, disabled-by-default Phase 6 adapter |
 | HTTPX | 0.28.1 | Test HTTP client dependency |
 | pytest / pytest-cov | 8.4.2 / 7.1.0 | Automated test runner and coverage tooling |
 | Ruff | 0.16.3 | Lint and formatting checks |
@@ -87,7 +95,9 @@ Transitive packages remain recorded in that lockfile rather than duplicated here
 | `actions/checkout` / `astral-sh/setup-uv` | 7.0.1 / 10.0.1, pinned by commit SHA | CI checkout and uv installation |
 | GitHub Actions | Run `32195390241` passed remotely | Historical locked checks, tests, clean migration, schema-drift check, and image build |
 
-No real-model SDK is installed.
+The OpenAI SDK is installed for the keyless-tested adapter. No credential was
+available and no real provider request was made during implementation or local
+verification.
 
 ## Official reference ledger
 
@@ -114,6 +124,9 @@ checks, and CI configuration; they are not domain-content sources.
 | 2026-08-18 | [Ruff documentation](https://docs.astral.sh/ruff/) and [mypy documentation](https://mypy.readthedocs.io/en/stable/) | Lint/format and strict type-check configuration |
 | 2026-08-18 | [GitHub Actions documentation](https://docs.github.com/en/actions) | Ubuntu CI jobs and service containers |
 | 2026-08-22 | [Hatch build configuration](https://hatch.pypa.io/1.0/config/build/) | Wheel package-data behavior checked after a duplicate template inclusion failed the first image build |
+| 2026-08-23 | [OpenAI Responses create reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create) | Stateless Responses request fields, function tools, structured text output, token bounds, storage, and parallel-tool controls |
+| 2026-08-23 | [OpenAI GPT-5.6 Luna model page](https://developers.openai.com/api/docs/models/gpt-5.6-luna) | Approved model capabilities and the dated input/cached-input/output price snapshot |
+| 2026-08-23 | [OpenAI Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs) | Strict-schema subset and rejection of unsupported composition keywords |
 
 Phase 2 reused the first-party Pydantic, SQLAlchemy, PostgreSQL, Alembic, FastAPI,
 Redis/RQ, pytest, and Docker documentation already listed above. No third-party
@@ -147,8 +160,9 @@ no external benchmark formula, dataset, model output, or report template is used
 
 ### Deterministic fake provider
 
-Phases 1 through 5, local development, and CI use the in-repository deterministic fake
-provider. Every output from that path is **synthetic infrastructure validation**.
+Phases 1 through 6, local development, and CI use the in-repository deterministic
+fake provider by default. Every output from that path is **synthetic infrastructure
+validation**.
 It can show that API submission, Redis/RQ dispatch, typed tool execution,
 transactions, tracing, deterministic grading, and retrieval work together. It
 cannot support claims about real-model quality, reliability, model latency, token
@@ -156,7 +170,7 @@ consumption, or cost.
 
 For each reported fake-provider experiment, retain the suite/case version and
 definition hashes, provider identity, trial identity, raw trace, persisted grader
-evidence, exact command, and code revision when available. Phase 1 through Phase 5
+evidence, exact command, and code revision when available. Phase 1 through Phase 6
 executions link to immutable suite/case rows that carry the version and hashes;
 those hashes are not duplicated on each execution row.
 
@@ -271,24 +285,47 @@ the scoped database counts matched the recorded 150/150/150/3,042/264/984/42/30
 execution/attempt/dispatch/grader/tool/trace/refund/ticket evidence. Token and cost
 availability remained false. This validates the portfolio demo path, not a model.
 
-### Future real provider
+### Implemented but uninvoked real-provider track
 
-A single optional real-provider adapter and experiment are the separately gated
-Phase 6 track. They may be added and run only after explicit approval to use
-credentials and potentially incur cost. Starting the cost-free Phase 6 portfolio
-track is not that approval. Any later real result must identify the provider/model,
-relevant configuration, suite/case versions and hashes, run date, trial count, raw
-result location, exact reproducible command, and measured token/cost/latency
-source. It must be reported separately from fake-provider validation.
+Phase 6 implements one optional OpenAI Responses adapter for `gpt-5.6-luna`.
+Revision `20260823_0009` adds the original durable request/response/tool ledger and
+recovery constraints. The server-owned experiment identity records the model,
+request controls, one-trial/one-attempt/25-case/six-turn bounds, $5 conservative
+ceiling, and a 2026-08-23 price snapshot sourced from the official model page.
+The API requires an idempotency key and PostgreSQL permits only one such bounded
+experiment. The credential setting is worker-only and execution is disabled by
+default.
 
-No real provider or paid API was invoked for Phase 0–5 or the current cost-free
-Phase 6 work.
+All provider tests use in-repository scripted clients, set SDK retries to zero,
+and make no network call. Environment preflight reported only credential-presence
+Booleans: both supported variables were absent. No real provider or paid API was
+invoked for Phase 0–6, so there is no real-model pass rate, quality comparison,
+token result, latency result, or provider bill to report.
+
+Any later credentialed result must identify the provider/model, returned model,
+configuration hash, suite/case and prompt hashes, run date, trial count, raw result
+location, exact exercised command, provider-returned token source, client-observed
+latency source, and estimated-cost formula. It must be reported separately from
+fake-provider validation, and the price-snapshot estimate must not be described as
+measured billing.
+
+The final keyless Phase 6 gate checked 55 locked packages, passed Ruff and mypy,
+passed all 247 tests, round-tripped clean PostgreSQL revision `20260823_0009`
+without drift, rebuilt the Compose application, and completed a deterministic-fake
+API/RQ smoke. The smoke returned `202`, created one expected refund, recorded the
+two expected tools and seven traces, and passed all four criteria. Same-key replay
+converged, the disabled real-provider request returned `403`, and a Redis outage
+kept liveness `200` while readiness changed to `503` and then recovered to `200`.
+These are local implementation and synthetic-infrastructure facts, not OpenAI
+model output. The exact commands and timing are retained in `PROGRESS.md`.
 
 ## Metrics integrity
 
 Never fabricate or estimate a measured result. This includes test counts, scenario
-counts, pass rates, defect-detection rates, latency, throughput, token usage, costs,
-benchmark comparisons, and resume metrics.
+counts, pass rates, defect-detection rates, latency, throughput, token usage,
+provider billing, benchmark comparisons, and resume metrics. A deterministic cost
+calculation may be reported only as an **estimate** when its provider-returned token
+inputs, immutable dated rate snapshot, and formula are all retained.
 
 A number may be reported as a result only when:
 
@@ -304,7 +341,7 @@ facts. The 25-case × two-prompt × three-trial comparison produced exactly 150
 executions locally. Its zero delta is a verified deterministic-fake infrastructure
 result, not evidence that the prompts are equally effective for a real model.
 
-## Phase 0–5 integrity check
+## Phase 0–6 integrity check
 
 - [x] Confirm all ParcelDesk domain assets were independently authored.
 - [x] Preserve the previously verified secret, credential, real-data, and employer-
@@ -362,7 +399,16 @@ result, not evidence that the prompts are equally effective for a real model.
 - [x] Record successful Phase 5 publication: `origin/main` advanced to `270bbe4`
   through implementation commit `c481ed4` and documentation commit `270bbe4`.
 - [x] Verify the Phase 6 deterministic-fake demo and reconcile its exact result
-  with the portfolio guide without adding a real provider or credential.
-- [x] Record local Phase 6 cost-free portfolio commit `5a058e0` and distinguish it
-  from published `origin/main` at `270bbe4`.
+  with the portfolio guide without invoking a real provider or using a credential.
+- [x] Record publication of Phase 6 cost-free portfolio commits `5a058e0` and
+  `31a4192` without inferring a remote-CI result.
+- [x] Confirm the Responses adapter, ledger, recovery tests, and provider-neutral
+  rules are original EvalGuard implementation material and leave published suite
+  rows/hashes immutable.
+- [x] Record OpenAI SDK 2.54.0 and only the first-party Responses, Luna, pricing,
+  and Structured Outputs references used for the adapter contract.
+- [x] Verify keyless scripted tests make no network call, no credential value is
+  printed or committed, and all real-provider results remain explicitly absent.
+- [ ] Reconcile the final Phase 6 full test, migration, Compose, fake-smoke, secret
+  scan, commit, and push results with `PROGRESS.md`.
 - [ ] Record any observed Phase 3 remote-CI result if it occurs; none is claimed.

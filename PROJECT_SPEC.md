@@ -10,11 +10,17 @@ aggregate summaries/comparisons, and a small server-rendered report. Its final 1
 tests, clean migration round trip, rebuilt clean Compose topology, live 150-execution
 prompt comparison, idempotent replay, and Redis readiness outage/restoration probe
 passed locally. Implementation commit `c481ed4` and documentation commit `270bbe4`
-are published on `origin/main`; no Phase 5 remote-CI result is claimed. The user
-advanced Phase 6 on 2026-08-22. The cost-free portfolio guide and deterministic-fake
-demo are locally verified, while the real-provider adapter and experiment remain
-blocked on the contract's separate explicit approval for credentials and possible
-spending.
+are published on `origin/main`; no Phase 5 remote-CI result is claimed. The Phase 6
+cost-free portfolio guide and deterministic-fake demo are also locally verified and
+published through commit `31a4192`. On 2026-08-23 the user advanced the remaining
+milestone and authorized its bounded keyless implementation. The implementation
+selects the OpenAI Responses API and server-owned `gpt-5.6-luna` configuration,
+adds a durable paid-call state machine, and preserves the deterministic fake as the
+default credential-free path. No provider credential was available, zero paid
+calls were made, and no live-provider result exists. The keyless Phase 6
+implementation passed its local dependency, static, PostgreSQL, migration,
+Compose, deterministic-fake smoke, and readiness gates; the separately
+credentialed result remains blocked and is not inferred from those checks.
 
 ## Product outcome
 
@@ -27,8 +33,11 @@ operational measurements. The current system derives explicit-denominator
 correctness, grader-family/category, criterion-vector stability, attempts, queue
 delay, execution duration, and end-to-end duration from persisted evidence. Fake-
 provider timing is labeled synthetic infrastructure timing, not model latency.
-Token usage and cost remain explicitly unavailable because no current provider
-records them; they are never fabricated or represented as measured zero.
+Token usage and cost remain unavailable for deterministic-fake executions. A
+persisted real-provider response can supply measured token usage; EvalGuard derives
+an explicitly labeled USD estimate from its immutable dated price snapshot. That
+estimate is not a provider invoice or billing measurement, and absent values are
+never fabricated or represented as measured zero.
 
 The domain is an independently invented business named ParcelDesk. Synthetic
 business state contains customers, orders with relational shipping-address fields,
@@ -275,22 +284,32 @@ report plumbing; they do not establish that either prompt is better.
   validation, shows prompt/suite hashes and limitations, and links all 150 raw
   execution endpoints. There is no React, JavaScript application, or real model.
 
-### Phase 6: portfolio finish and separately approved real-provider experiment
+### Phase 6: portfolio finish and bounded real-provider experiment
 
 - The cost-free track consolidates architecture, methodology, limitations,
   evidence, a code tour, interview narratives, and a repeatable PowerShell demo.
-- The demo remains pinned to the deterministic fake until a separate approval names
-  one provider/model, credential handling, and a bounded request/cost scope.
-- A real network adapter cannot be inserted into the current long deterministic
-  transaction. The approved implementation must introduce shorter durable
-  provider/tool steps and explicit resume semantics before making a network call.
-- Real-provider evidence must be stored and reported separately with provider/model,
-  code revision, suite/prompt hashes, trial count, raw evidence, measured usage and
-  cost sources, and limitations. It must never be blended with synthetic results.
+- The demo remains pinned to the deterministic fake and can neither consume a
+  credential nor incur model cost.
+- The approved real-provider implementation selects the OpenAI Responses API with
+  server-owned `gpt-5.6-luna` configuration. It admits exactly one
+  idempotency-keyed real-provider experiment, at most 25 cases, one trial, one
+  execution attempt, no synthetic fault injection, and a conservative $5 ceiling.
+- The real adapter does not enter the fake path's long deterministic transaction.
+  It commits an exact prepared request, sends it with no database transaction open,
+  commits sanitized response evidence before tools, and applies each persisted tool
+  result in a short transaction before deterministic grading.
+- Provider requests use strict typed function and final-resolution schemas,
+  `store=false`, `parallel_tool_calls=false`, zero SDK retries, one network attempt
+  per turn, and a bounded turn count. A send without a durable response is
+  indeterminate and never repeated.
+- Real-provider evidence is reported separately with provider/model, immutable
+  configuration hash, suite/prompt hashes, raw turns, provider-reported usage,
+  price-snapshot-derived estimated cost, and limitations. It is never blended with
+  synthetic results. No credential was present and no paid experiment has run.
 
 ## Target V1 domain contract
 
-The current product through Phase 5 exposes these four typed tools:
+The current product through Phase 6 exposes these four typed tools:
 
 - `lookup_order`
 - `update_shipping_address`
@@ -330,7 +349,12 @@ FastAPI
   -> best-effort Redis/RQ publication
   -> RQ worker
   -> PostgreSQL attempt claim and lease
-  -> selected model-provider adapter
+  -> selected model-provider path
+     -> deterministic fake: one local atomic provider/tool/grader transaction
+     -> network provider: committed ProviderTurn request
+        -> network send with no open database transaction
+        -> committed sanitized response and usage
+        -> one persisted tool result per short transaction
   -> typed ParcelDesk tools
   -> PostgreSQL business state and ordered trace events
   -> deterministic graders
@@ -353,7 +377,7 @@ src/evalguard/
   db/           SQLAlchemy models, sessions, and migration integration
   domain/       ParcelDesk business rules and typed tools
   evaluation/   suites, execution orchestration, traces, and graders
-  providers/    deterministic fake and later optional real adapter
+  providers/    deterministic fake and bounded OpenAI Responses adapter
   workers/      RQ job entry points and worker lifecycle
 ```
 
@@ -369,9 +393,10 @@ API and worker processes share the same application code and PostgreSQL data.
 | `AgentPrompt` | Published, immutable agent instructions with a version and canonical hash |
 | `Experiment` | One suite/prompt/provider/policy/trial configuration and aggregate lifecycle |
 | `CaseExecution` | One case/trial execution with isolated state and aggregate attempt status |
-| `ExecutionAttempt` | One claimed provider/tool run with generation, lease, steps, outcome, and safe failure evidence |
-| `ExecutionDispatch` | One durable PostgreSQL-to-RQ publication intent for an execution generation |
+| `ExecutionAttempt` | One claimed provider/tool run with origin generation, lease, steps, bounded recovery count, outcome, and safe failure evidence |
+| `ExecutionDispatch` | One durable PostgreSQL-to-RQ attempt or same-attempt-resume intent for an execution generation |
 | `ExecutionFaultPlan` | One development/test-only synthetic failure plan attached to an execution |
+| `ProviderTurn` | One durable prepared request, send fence, sanitized response/usage, append-only tool-output prefix, or terminal provider outcome |
 | `TraceEvent` | Ordered evidence of provider, tool, result, failure, and resolution events |
 | `ToolInvocation` | Typed call identity, arguments, outcome, and linkage to its execution |
 | `GraderResult` | Deterministic criterion-level outcome and supporting evidence |
@@ -413,6 +438,22 @@ API and worker processes share the same application code and PostgreSQL data.
   publication attempts may continue with capped backoff until Redis accepts the
   job. Provider/tool attempts are bounded by the experiment's `max_attempts` and
   each retry or recovery receives a strictly newer dispatch generation.
+- A real-provider experiment has a complete, immutable model/configuration/hash
+  identity; deterministic-fake experiments keep those fields null. PostgreSQL
+  permits only documented provider-turn state transitions and prevents deleting a
+  turn, rewriting its request identity, or shortening its persisted tool-output
+  prefix.
+- The exact provider request is committed in `prepared` state before its send fence.
+  Network I/O occurs after commit and without an open database transaction. A
+  sanitized response, returned model, provider identifiers, measured usage, and
+  latency are committed before any requested tool executes.
+- A `request_started` turn with no durable response is non-retryable and
+  indeterminate. A response arriving after claim fencing is retained as
+  `superseded` evidence and cannot authorize stale tool or business effects.
+- Worker interruption with no turn, or at `prepared`, `response_received`,
+  `tools_completed`, or `final_response`, may schedule a newer `resume` dispatch
+  bound to the same logical attempt. The attempt count does not increase, recovery
+  is bounded to three resumptions, and exhausting that budget fails closed.
 - A current dispatched row whose execution remains queued/retrying or legacy
   `enqueue_failed` is audited after 30 seconds. A missing or exact-but-unrunnable RQ job becomes a generation/job-
   checked interrupted attempt before recovery advances or exhausts; an exact
@@ -508,6 +549,15 @@ development or test. These settings and the fault plan are part of idempotent
 request intent. Reuse of an `Idempotency-Key` with a different suite, prompt,
 trials, provider, policy, or fault plan returns `409`.
 
+`openai-responses` creation is disabled unless the explicit runtime gate is on and
+requires an `Idempotency-Key`, one trial, `max_attempts=1`, the 300-second job
+timeout, no fault injection, and a suite of at most 25 cases. A PostgreSQL advisory
+transaction lock plus an authoritative Experiment lookup admits only one authorized
+real-provider experiment globally. An exact same-key replay returns that experiment;
+a different key or incompatible request returns `409`. The provider model,
+non-secret request/pricing configuration, and canonical configuration hash are
+server-owned rather than accepted from client JSON.
+
 Concurrent requests for one key are serialized by a PostgreSQL advisory lock on a
 dedicated connection/session while the API selects or creates the durable
 experiment/outbox state. The lock is released before best-effort Redis I/O because
@@ -521,13 +571,17 @@ a queued job. Ordinary maintenance also audits a dispatched-but-unclaimed curren
 generation after 30 seconds and recovers missing or non-runnable exact jobs through
 the attempt budget.
 
-Experiment retrieval exposes prompt identity, trial count, policy, and per-
-execution attempt counts. Execution
+Experiment retrieval exposes prompt and immutable provider identity, trial count,
+policy, and per-execution attempt counts. Execution
 retrieval includes structured order addresses and tickets plus the attempt count,
-current generation, lease/failure summary, ordered attempt records, and complete
-dispatch history. Summary/comparison endpoints and the HTML comparison report are
+current generation, lease/failure summary, recovery counts, ordered attempt records,
+attempt/resume dispatch history, and sanitized provider turns. Summary retrieval
+adds provider request/response counts, returned model identifiers, measured token
+usage, provider latency, and estimated USD cost when those facts exist.
+Summary/comparison endpoints and the HTML comparison report are
 implemented in Phase 5. The mutating manual retry-failures endpoint remains
-planned; automatic bounded Phase 4 recovery is unchanged.
+planned; bounded Phase 4 attempt recovery and Phase 6 same-attempt resume are
+automatic.
 
 ## Reproducibility and evidence
 
@@ -546,8 +600,10 @@ planned; automatic bounded Phase 4 recovery is unchanged.
   command.
 - Fake-provider results are labeled synthetic infrastructure validation, not
   real-model performance.
-- A real-provider adapter and real experiments remain Phase 6 work that requires
-  explicit approval for credentials and potential spending.
+- The bounded real-provider adapter is implemented and disabled by default. CI and
+  local deterministic validation use scripted keyless clients and make no paid
+  call. A live invocation requires an actually available worker-only credential and
+  remains unperformed.
 
 ## Testing strategy
 
@@ -599,6 +655,19 @@ planned; automatic bounded Phase 4 recovery is unchanged.
   warning. Its end-to-end case completed two 75-execution arms and verified 150
   executions, 3,042 graders, 264 tool invocations, 984 trace events, 42 refunds,
   and 30 tickets.
+- **Phase 6 keyless tests** use strict scripted clients rather than a network or
+  paid API. Unit coverage validates exact Responses requests, strict tool/final
+  schemas, tamper rejection, response normalization, redacted failures, retry-free
+  transport, and configuration/cost bounds. PostgreSQL/API/RQ coverage validates
+  immutable provider identity, turn transitions and append-only tool evidence,
+  the single authorized idempotent run, provider-neutral grading, successful tool
+  execution and execution isolation, usage-field/estimated-cost retrieval,
+  malformed purchased-response evidence, no resend after an unknown outcome, safe
+  same-attempt resume, three-resume exhaustion, and current-generation fencing.
+  A lock probe during the scripted send proves the executor holds no database
+  transaction across that boundary. A fenced request that returns late is retained
+  as immutable superseded evidence with no tool or business effect. The final
+  current-tree suite passed all 247 tests with the one known dependency warning.
 - **End-to-end tests** cross the API, queue, worker, tools, persistence, grader, and
   retrieval boundary with the deterministic fake provider.
 - **Smoke tests** verify container startup, clean migration, liveness, and readiness
@@ -683,12 +752,27 @@ measurement, push, or remote-CI result was inferred. Implementation commit
 `c481ed4` records that verified state; it was later published with documentation
 commit `270bbe4`. No Phase 5 remote-CI result is claimed.
 
+## Phase 6 keyless definition of done
+
+The bounded provider implementation completed local acceptance without a provider
+credential or paid request. Locked installation, Ruff, formatting, mypy, all 247
+tests—including PostgreSQL, Redis, RQ, API, and provider coverage—clean
+`20260823_0009` upgrade/downgrade/re-upgrade and drift checks, rebuilt Compose
+startup, deterministic-fake
+API/RQ execution and replay, and Redis readiness outage/recovery passed. The API
+also rejected a real-provider submission with the default-disabled gate before any
+network boundary. The one credentialed experiment remains a separately blocked
+result, not missing evidence for the keyless implementation claim.
+
 ## Full V1 definition of done
 
-The deterministic V1 foundation through Phase 5 is complete: four typed tools, 25
+The deterministic V1 foundation through Phase 6 is complete: four typed tools, 25
 immutable cases, two immutable agent prompts, three trials per prompt/case, 150 raw
 reproducible executions, deterministic summaries/comparison, and a small server-
 rendered report. The cost-free Phase 6 portfolio finish is locally verified and
 preserves architecture, methodology, limitations, demo steps, provenance, and the
-precise source of every reported number. The optional Phase 6 real-provider adapter
-and real run occur only after separate explicit approval.
+precise source of every reported number. The bounded Phase 6 real-provider adapter,
+durable turn ledger, same-attempt recovery, and keyless coverage are implemented
+and locally accepted from recorded commands. A credentialed paid run remains
+unperformed because no worker-only credential was available, so no live-provider
+result, provider bill, or real-model quality claim is included.
