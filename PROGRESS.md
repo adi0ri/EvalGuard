@@ -1278,3 +1278,14 @@ provider-latency, token, or billing evidence. The Phase 6 implementation/local
 acceptance gate is complete. The credentialed experiment remains unchecked and
 externally blocked because no worker-only credential is available; zero paid calls
 were made. Git commits and requested publication are the next actions.
+
+## Phase 6 keyless implementation commit checkpoint — 2026-08-23
+
+Git author name and email remained configured without either value being printed.
+Local commit `5479c9a` (`feat: complete bounded Phase 6 provider track`) records the
+adapter, immutable provider configuration, revision `20260823_0009`, provider-turn
+ledger, recovery executor, provider-neutral grading, API/analysis exposure, 247-test
+gate, final rebuilt-image smoke, and reconciled durable documents. At this
+checkpoint local `main` is one commit ahead of `origin/main`, which remains at the
+published cost-free portfolio checkpoint `31a4192`. No remote-CI result is inferred.
+The next action is the user-requested push.
