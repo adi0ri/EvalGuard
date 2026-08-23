@@ -14,7 +14,7 @@ dependencies = [
   "pydantic>=2.11,<3",
   "pydantic-settings>=2.10,<3",
   "redis>=6.2,<7",
-  "rq>=2.4,<3",
+  "rq>=2.8,<3",
   "sqlalchemy>=2.0.41,<3",
   "uvicorn[standard]>=0.35,<1",
 ]

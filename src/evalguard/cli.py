@@ -25,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
         "prepare-test-db",
         help="Create and migrate the isolated PostgreSQL database used by pytest",
     )
+    reconcile = subparsers.add_parser(
+        "reconcile",
+        help="Run one bounded stale-attempt and pending-dispatch recovery pass",
+    )
+    reconcile.add_argument("--limit", type=int, default=100)
     return parser
 
 
@@ -92,6 +97,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.command == "prepare-test-db":
         print(json.dumps(prepare_test_database(settings.test_database_url), sort_keys=True))
+        return 0
+    if args.command == "reconcile":
+        from evalguard.workers.dispatch import reconcile_pending_dispatches
+        from evalguard.workers.jobs import recover_stale_executions
+
+        recovery = recover_stale_executions(limit=args.limit)
+        dispatch = reconcile_pending_dispatches(limit=args.limit)
+        print(
+            json.dumps(
+                {
+                    "recovery": recovery.as_dict(),
+                    "dispatch": dispatch.as_dict(),
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     raise AssertionError(f"Unhandled command: {args.command}")
 

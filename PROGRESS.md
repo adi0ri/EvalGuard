@@ -532,3 +532,153 @@ email remained configured, and commit `083808c` records the verified Phase 3
 implementation. Phase 3 is not pushed and no Phase 3 remote-CI result is claimed.
 Keep it local until the user explicitly asks to publish these Phase 3 commits. Do
 not begin Phase 4 until the user explicitly advances it.
+
+## Phase 3 publication and Phase 4 authorization — 2026-08-22
+
+After the historical checkpoint above, the user explicitly requested publication
+of Phase 3 and authorized the start of Phase 4. Phase 3 implementation commit
+`083808c` and documentation follow-up `6655e79` were pushed successfully; local
+`main` and `origin/main` were both at `6655e79`. No Phase 3 remote-CI result was
+observed or claimed.
+
+## Phase 4 implementation and final local acceptance — 2026-08-22
+
+The user explicitly advanced the repository to Phase 4. The implementation adds a
+PostgreSQL transactional outbox, generation-fenced RQ delivery, durable execution
+attempts and leases, bounded classified retries, explicit job timeouts, exact tool-
+step accounting, worker/CLI recovery, and typed development/test-only fault plans.
+It does not change either immutable suite, any case definition, fake plan, grader
+family, or suite/case hash. The deterministic fake remains the only provider.
+
+## Phase 4 final dependency, static, and automated verification — 2026-08-22
+
+The final current-tree commands produced these exact results:
+
+| Command | Exact observed result |
+| --- | --- |
+| `uv lock --offline` | Succeeded: `Resolved 50 packages in 2ms`. |
+| `uv sync --frozen --all-groups` | Succeeded: `Checked 49 packages in 8ms`. |
+| `git diff --check` | Clean except for the expected LF→CRLF working-copy warnings. |
+| `uv run ruff check .` | Succeeded: `All checks passed!` |
+| `uv run ruff format --check .` | Succeeded: `67 files already formatted`. |
+| `uv run mypy` | Succeeded: `Success: no issues found in 31 source files`. |
+| `uv run pytest` | Collected 189 tests; `189 passed, 1 warning in 135.79s (0:02:15)`. |
+
+The one pytest warning is the known dependency-originated Starlette
+`TestClient`/httpx deprecation warning. It was not suppressed and did not fail the
+run. The 189-test suite covers the PostgreSQL/Redis/RQ/API/end-to-end contracts for
+outbox recovery and collisions, initial-only replay, attempt exhaustion,
+permanent/timeout/step failures, rollback, isolation, stale/duplicate delivery,
+fresh and expired leases, pre-claim recovery, dispatched-job loss, fault-plan
+environment restrictions, and retrieval evidence.
+
+The final concurrency audit added three PostgreSQL cases. Two parametrized cases
+prove that a migrated legacy
+`enqueue_failed` execution whose exact current-generation RQ delivery is terminal
+or missing enters pre-claim abandonment recovery, records one interrupted attempt,
+advances to generation 2, and leaves its next dispatch pending. One case pauses a
+worker after claim, recovers that attempt, then proves the old worker revalidates
+expected attempt number, generation, and `running` status under the execution lock
+and returns stale before creating any customer, order, refund, invocation, grader,
+or provider/tool trace evidence.
+
+## Phase 4 disposable migration and backfill verification — 2026-08-22
+
+The explicit target was
+`evalguard_phase4_final_migration_20260822`. It was absent before the check, was
+created solely for this sequence, and the normal development/test data was not
+modified. The observed sequence was:
+
+1. upgrade the blank database through `20260822_0006`;
+2. seed the unchanged v1 and v2 suites and confirm their hashes:
+   - v1: `aaedf653770166eb7e967352b9242509a94dd9ba3e4ee833576617c403ec6abd`;
+   - v2: `28289cfdcd98be852b00e451b2f52ae8a9af65a454a6642bb96acb4991a19782`;
+3. insert representative legacy executions in `queued`, `enqueue_failed`,
+   `running`, `retrying`, and `completed` states;
+4. upgrade to `20260822_0007 (head)` and run `alembic check`, which reported no
+   model/migration drift;
+5. verify existing experiment timeouts were backfilled to 300 seconds; `running`
+   and `retrying` rows were normalized to `queued`; queued, legacy
+   `enqueue_failed`, and normalized active rows received pending generation-1
+   dispatches; and the completed row remained untouched without a dispatch;
+6. downgrade `0007` to `0006`, manually restore representative `running` and
+   `retrying` rows, re-upgrade to `0007`, and observe the same normalization and
+   dispatch backfill again;
+7. confirm `alembic current` again reported `20260822_0007 (head)` and a second
+   `alembic check` reported no new upgrade operations; and
+8. drop the exact disposable database and verify that it was absent afterward.
+
+## Phase 4 Compose, schema, seed, and idle recovery verification — 2026-08-22
+
+| Command or check | Exact observed result |
+| --- | --- |
+| `docker compose config --quiet` | Exited 0 with no configuration error. |
+| `docker compose up --build -d --wait` | Exited 0 after the final image rebuild and wait. |
+| Container migration state | Reported `20260822_0007 (head)`. |
+| Container `alembic check` | Reported no model/migration drift. |
+| Container seed, run twice | Returned the same suite/case IDs and hashes both times, with 25 v2 cases. |
+| `evalguard reconcile`, run twice | Both bounded passes reported no work and all summary counters at zero. |
+
+After bring-up, PostgreSQL, Redis, and the API were healthy; the worker was
+running; and the one-shot `migrate` and `test-db` services had exited 0.
+
+## Phase 4 final live baseline and idempotent replay — 2026-08-22
+
+The final rebuilt image returned `200` from both liveness and readiness. A baseline
+v2 experiment submission returned `202`. The worker completed all 25 executions;
+retrieval showed 25 total execution attempts, 25 dispatches, 507/507 passing
+deterministic grader results, 44 tool calls, 7 refunds, and 5 support tickets.
+
+Replaying the same idempotency key returned `202` with the same experiment ID. All
+25 executions remained completed and the aggregate execution-attempt count remained
+25, demonstrating that compatible replay did not repeat provider/tool work.
+
+## Phase 4 final live retry, timeout, and worker-interruption recovery — 2026-08-22
+
+Three separate legacy-v1 executions exercised distinct recovery paths:
+
+- A typed transient failure produced attempt statuses `retry_scheduled` then
+  `succeeded`, persisted failure kind `injected_transient`, and dispatch generations
+  1 and 2. The final execution had one refund and 4/4 passing graders.
+- A real RQ-enforced one-second timeout produced attempt statuses
+  `retry_scheduled` then `succeeded`, persisted retryable failure kind `timeout`,
+  and dispatch generations 1 and 2. The final execution had one refund and 4/4
+  passing graders.
+- An actual worker process received SIGKILL while its attempt was `running` with a
+  live lease. Recovery persisted an `interrupted` attempt with failure kind
+  `worker_interruption`, advanced from generation 1 to 2, and then recorded a
+  `succeeded` attempt. The final execution had one refund and 4/4 passing graders.
+
+The latter two checks exercise real RQ timeout and process-loss boundaries rather
+than inferring production-hook behavior from direct function tests.
+
+## Phase 4 Redis-outage acceptance and automatic outbox recovery — 2026-08-22
+
+Redis was deliberately stopped while the API remained available. Liveness stayed
+`200`, readiness changed to `503`, and a new v1 submission still returned `202`.
+The accepted execution remained `queued` with zero execution attempts; its durable
+dispatch remained `pending` after publication attempt 1 recorded `ConnectionError`.
+
+After Redis was restored, worker reconciliation automatically published and
+completed that same execution on its first provider/tool attempt. The dispatch
+attempt count became 2, one refund existed, 4/4 graders passed, and readiness
+returned to `200`. The outage therefore did not terminalize accepted work or spend
+an execution attempt.
+
+The final log review found only the expected injected-timeout and Redis-outage
+warnings/errors. At the end of verification, PostgreSQL, Redis, and the API were
+healthy; the worker was running; and the one-shot migration/test-database services
+retained their successful exit state. All live results above are **synthetic
+infrastructure validation**, not real-model quality, reliability, latency, token,
+or cost evidence. No real or paid provider was called.
+
+## Phase 4 completion, Git status, and precise next action — 2026-08-22
+
+Phase 4 implementation and local acceptance are complete. All Phase 4 acceptance
+items in `PLAN.md` are verified from the evidence above. No Phase 4 commit hash,
+push, or remote-CI result is claimed: the local commit is pending, and Phase 4 must
+remain unpushed until the user explicitly requests publication.
+
+Phase 5 comparison/reporting remains out of scope and has not started. The precise
+next action is to record the pending local Phase 4 commit when it occurs, then wait
+for explicit user direction before any push or Phase 5 work.

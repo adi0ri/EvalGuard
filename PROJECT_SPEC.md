@@ -5,11 +5,15 @@
 Phase 0, Phase 1, and Phase 2 are complete. Phase 3 implementation and local
 acceptance are complete: 158 tests, locked installation, static checks, the clean
 `20260822_0006` migration round trip, Compose startup, a live 25-case smoke, and a
-Redis-unavailable readiness probe passed. Phase 3 is locally committed at
-`083808c`; it is not pushed, and no Phase 3 remote-CI result is claimed. This
-specification defines the implemented Phase 3 breadth and the remaining V1
-contract. Phase 4 and later
-requirements are constraints to preserve, not authorization to implement them now.
+Redis-unavailable readiness probe passed. Phase 3 commits `083808c` and `6655e79`
+are pushed; local `main` and `origin/main` are at `6655e79`. No Phase 3 remote-CI
+result is claimed. Phase 4
+resilience implementation and local acceptance are complete, including revision
+`20260822_0007`, 189 passing tests, its migration/backfill round trip, Compose and
+live recovery checks, a real RQ timeout, an actual worker interruption, and Redis-
+outage recovery. No Phase 4 commit, push, or remote-CI result is claimed. This
+specification defines the implemented Phase 4 behavior and remaining V1 contract.
+Phase 5 and later requirements remain out of scope until explicitly advanced.
 
 ## Product outcome
 
@@ -18,8 +22,10 @@ agents. It runs a support agent against versioned, stateful scenarios; records
 responses, tool calls, database changes, failures, latency, token use, and cost
 when those values exist; grades primary correctness deterministically; and
 ultimately compares experiments by correctness, policy compliance, stability,
-latency, and cost. The current system records lifecycle timestamps and terminal
-failure text, but it does not derive latency metrics or record tokens/cost.
+latency, and cost. The current system records lifecycle timestamps, durable
+dispatch and execution-attempt evidence, safe failure classifications, and
+terminal failure text, but it does not derive comparison/latency metrics or record
+tokens/cost.
 
 The domain is an independently invented business named ParcelDesk. Synthetic
 business state contains customers, orders with relational shipping-address fields,
@@ -30,16 +36,16 @@ exercise.
 ## Users and core workflow
 
 The initial user is a developer or evaluator comparing agent behavior. In the
-current Phase 3 workflow, that user:
+current Phase 4 workflow, that user:
 
 1. loads the preserved one-case legacy suite and the immutable 25-case v2 suite;
 2. submits an experiment;
-3. receives `202 Accepted` after the experiment and all 25 case executions are
-   stored;
+3. receives `202 Accepted` after the experiment, all 25 case executions, and their
+   initial PostgreSQL dispatch intents are stored;
 4. lets RQ workers run the deterministic fake provider across those executions;
 5. retrieves the aggregate experiment and individual executions; and
-6. inspects the stored business outcome, ordered trace, and criterion-level grader
-   result.
+6. inspects the stored business outcome, ordered trace, criterion-level grader
+   result, attempts, dispatch generations, leases, and safe failure evidence.
 
 The deterministic fake follows each case's typed, hashed plan through the same four
 production tools used by the worker. Six deterministic grader families then inspect
@@ -93,8 +99,10 @@ infrastructure validation rather than model-quality evidence.
   invocation is created.
 - Execution-scoped composite foreign keys for ticket customer, order, and tool-call
   ownership, plus PostgreSQL uniqueness for convergent escalation.
-- Concurrent `Idempotency-Key` submissions serialized on one dedicated PostgreSQL
-  connection/session through persistence, enqueue attempt, and dispatch outcome.
+- At the Phase 2 checkpoint, concurrent `Idempotency-Key` submissions were
+  serialized on one dedicated PostgreSQL connection/session through persistence,
+  enqueue attempt, and dispatch outcome. Phase 4 supersedes the Redis portion with
+  the durable outbox described below.
 - Retrieval exposes structured order shipping addresses and support tickets.
 - Deterministic PostgreSQL, API, RQ-worker, and end-to-end coverage listed in
   `PLAN.md`; no SQLite or real/paid provider is used.
@@ -133,9 +141,89 @@ infrastructure validation rather than model-quality evidence.
   all rows share one execution. Other Phase 3 definitions reuse the existing JSON
   fixture/evidence columns and relational business tables.
 
+### Phase 4: durable dispatch and bounded execution recovery
+
+- Revision `20260822_0007` adds persisted experiment policies
+  (`max_attempts`, `job_timeout_seconds`, `max_tool_steps`, and
+  `retry_backoff_seconds`), per-execution attempt/generation/lease state, durable
+  `execution_attempts` and `execution_dispatches`, and one optional typed
+  `execution_fault_plans` row per execution. Its data migration gives existing
+  experiments the pre-Phase-4 300-second queue timeout, resets legacy `running`
+  and `retrying` executions to `queued`, and creates pending generation-1
+  dispatches only for queued or legacy `enqueue_failed` work. New experiments use
+  the Phase 4 application default of 30 seconds.
+- Experiment creation commits every selected case execution and generation-1
+  dispatch intent atomically in PostgreSQL. Immediate RQ publication is best
+  effort: Redis failure does not change accepted work to terminal failure or turn
+  the response into `503`; the API still returns `202` and leaves pending outbox
+  rows for reconciliation. Initial API reconciliation may bypass `available_at`
+  only for queued/legacy `enqueue_failed` work, never for a delayed `retrying`
+  execution.
+- A worker startup/maintenance cycle and the bounded `evalguard reconcile` CLI
+  entrypoint first recover stale leased attempts, then publish due current-
+  generation dispatch rows. General sweeps use row locks with `SKIP LOCKED` and
+  commit one dispatch attempt per transaction so multiple reconcilers can converge
+  without one Redis failure rolling back prior publications.
+- Generation 1 retains the legacy RQ job ID. Each retry/recovery increments the
+  execution's dispatch generation and uses a generation-qualified job ID. An RQ
+  duplicate is accepted only when queue origin, function, positional arguments,
+  empty keyword arguments, timeout, and runnable status exactly match. The legacy
+  one-argument generation-1 job remains compatible only when the persisted
+  experiment timeout is its legacy 300 seconds; a new 30-second experiment rejects
+  that shape. Before claim, a live RQ delivery is checked again against its
+  persisted dispatch and experiment timeout. A collision with different intent
+  consumes no execution attempt and reconciliation leaves the dispatch pending
+  with a safe error kind.
+- Maintenance rechecks a current dispatched row after 30 seconds when its execution
+  is still queued, retrying, or legacy `enqueue_failed` and no durable attempt was
+  claimed. Exact runnable RQ state is left alone. A missing or exact-but-unrunnable
+  job is recorded as one pre-claim interruption that consumes the bounded attempt
+  budget, then advances generation or fails at exhaustion; identity-mismatched work
+  is never claimed.
+- Each delivery claims an execution row before creating a durable attempt. Current-
+  generation concurrent duplicates return busy, older generations return stale,
+  and terminal executions replay without invoking the provider or tools. Only
+  explicitly classified transient, timeout, or worker-interruption failures retry,
+  and only while `attempt_number < max_attempts`; unexpected, injected permanent,
+  and maximum-step failures are terminal. Execution retry delays start at the
+  persisted base, double by attempt, and cap at 300 seconds.
+- After a delivery claims an attempt, the executor reacquires the execution lock
+  and requires the same attempt number, dispatch generation, and `running` status
+  before provider/tool work. Recovery therefore fences a paused old worker before
+  it can materialize fixtures or create effects.
+- The persisted job timeout is passed explicitly to RQ. Attempt leases use
+  PostgreSQL time and expire after the timeout plus a two-second recovery grace. An
+  RQ work-horse termination hook can recover immediately only after revalidating
+  the complete persisted dispatch identity and timeout; periodic recovery reclaims
+  only expired running attempts and uses execution-row locking to avoid racing a
+  live execution transaction.
+- One tool step means one entry into any of the four public `ToolRuntime` methods.
+  The budget counts success, rejection, semantic no-op, cached-success replay, and
+  persisted-error replay before lock/replay lookup. Typed validation that fails
+  before method entry is not counted. Calls through the limit are allowed; the
+  first call at limit + 1 is counted and rejected before invocation or mutation.
+- One deterministic fault plan may target one selected case in development or test
+  only. Its typed modes cover transient failure before the provider, transient
+  failure after tools, timeout, permanent failure before the provider, and worker
+  interruption for a bounded number of attempts. These plans are operational test
+  controls, not evaluation definitions or production provider behavior. The API
+  rejects their creation and the executor fails closed on any persisted plan in
+  other environments.
+- The deterministic fake execution remains one atomic database transaction. A
+  failed attempt rolls back fixture materialization, business mutations, tool
+  invocations, ordinary trace events, grader results, and final resolution
+  together; a separate transaction records attempt/failure/retry evidence. Retried
+  work therefore relies on the existing execution/actor scoping, exact replay,
+  semantic convergence, lock order, and PostgreSQL uniqueness without retaining a
+  partial business effect.
+- Experiment and execution retrieval expose the persisted resilience policy,
+  attempt count, current generation, lease/failure summary, ordered attempts, and
+  dispatch history. Phase 4 adds no new correctness grader family and does not
+  mutate either published suite, any case definition, or their hashes.
+
 ## Target V1 domain contract
 
-The current Phase 3 product exposes these four typed tools:
+The current product through Phase 4 exposes these four typed tools:
 
 - `lookup_order`
 - `update_shipping_address`
@@ -156,8 +244,9 @@ The immutable v2 suite contains exactly 25 independently authored scenarios:
 This implemented inventory covers eligible and expired refunds, high-value
 escalation, address changes before shipment, cross-customer access rejection,
 duplicate-effect prevention, deterministic recovery after a lookup miss, and
-escalation when information is missing. Generic timeouts, bounded retries, worker
-recovery, and fault injection remain Phase 4 work.
+escalation when information is missing. Phase 4 applies timeout, retry, lease,
+step-budget, and synthetic fault behavior around those same immutable cases; it
+does not add or rewrite suite content.
 
 Every execution begins with isolated synthetic ParcelDesk state. Primary graders
 inspect final PostgreSQL state, ordered tool traces, arguments, forbidden actions,
@@ -170,9 +259,10 @@ EvalGuard is a modular monolith deployed as separate API and worker processes:
 
 ```text
 FastAPI
-  -> PostgreSQL experiment and case-execution records
-  -> Redis queue
+  -> PostgreSQL experiment, case-execution, and dispatch-intent records
+  -> best-effort Redis/RQ publication
   -> RQ worker
+  -> PostgreSQL attempt claim and lease
   -> selected model-provider adapter
   -> typed ParcelDesk tools
   -> PostgreSQL business state and ordered trace events
@@ -180,6 +270,11 @@ FastAPI
   -> PostgreSQL grader results
   -> retrieval API
   -> later server-rendered experiment report
+
+Worker startup/maintenance or CLI
+  -> recover expired running attempts
+  -> reconcile due PostgreSQL dispatch intents to Redis/RQ
+  -> audit current dispatched-but-unclaimed RQ jobs after 30 seconds
 ```
 
 The suggested package boundaries are:
@@ -205,7 +300,10 @@ API and worker processes share the same application code and PostgreSQL data.
 | `EvaluationSuite` | Immutable, versioned collection of evaluation cases |
 | `EvaluationCase` | Reproducible scenario definition, fixtures, expectations, and hashes |
 | `Experiment` | A submitted evaluation configuration and aggregate lifecycle |
-| `CaseExecution` | One case/trial attempt with isolated state and execution status |
+| `CaseExecution` | One case/trial execution with isolated state and aggregate attempt status |
+| `ExecutionAttempt` | One claimed provider/tool run with generation, lease, steps, outcome, and safe failure evidence |
+| `ExecutionDispatch` | One durable PostgreSQL-to-RQ publication intent for an execution generation |
+| `ExecutionFaultPlan` | One development/test-only synthetic failure plan attached to an execution |
 | `TraceEvent` | Ordered evidence of provider, tool, result, failure, and resolution events |
 | `ToolInvocation` | Typed call identity, arguments, outcome, and linkage to its execution |
 | `GraderResult` | Deterministic criterion-level outcome and supporting evidence |
@@ -233,6 +331,40 @@ API and worker processes share the same application code and PostgreSQL data.
   requester customer from the case fixture; provider-controlled tool arguments do
   not choose that actor.
 - `(experiment_id, case_id, trial_number)` is unique.
+- Experiment acceptance atomically inserts each new case execution and its
+  generation-1 `ExecutionDispatch`; `(case_execution_id, generation)` and `job_id`
+  are each unique. A pending current-generation dispatch remains recoverable until
+  an exact, runnable RQ job identity including its timeout is accepted and the row
+  becomes dispatched.
+- Queue publication and provider execution are separate counters. Dispatch
+  publication attempts may continue with capped backoff until Redis accepts the
+  job. Provider/tool attempts are bounded by the experiment's `max_attempts` and
+  each retry or recovery receives a strictly newer dispatch generation.
+- A current dispatched row whose execution remains queued/retrying or legacy
+  `enqueue_failed` is audited after 30 seconds. A missing or exact-but-unrunnable RQ job becomes a generation/job-
+  checked interrupted attempt before recovery advances or exhausts; an exact
+  runnable job remains dispatched and an identity mismatch cannot consume an
+  attempt.
+- A delivery may claim an attempt only while its generation equals the execution's
+  current generation and the execution is nonterminal and not already running.
+  Execution row locks serialize claims, error completion, recovery, and duplicate
+  delivery. The executor revalidates attempt number, generation, and `running`
+  status under that lock immediately before provider/tool work; stale, busy,
+  fenced, and terminal deliveries do not invoke tools.
+- A running attempt has a durable lease derived from PostgreSQL time and the RQ job
+  timeout. Recovery must match current execution/attempt state and, for the RQ
+  work-horse callback, revalidate the complete persisted dispatch identity and
+  timeout before consuming an interruption attempt. Recovery locks the execution
+  before the attempt and cannot race the executor's held execution lock.
+- Failure classification is conservative. Injected transient failure, timeout, and
+  worker interruption are retryable; maximum-tool-step, injected permanent, and
+  unexpected exceptions are permanent. Safe kinds/messages and attempt outcomes
+  persist separately from rolled-back provider/tool work.
+- A public tool-method request consumes one step before execution locking and replay
+  lookup. Cached success, cached error, policy/ownership rejection, and semantic
+  no-op each consume a step; invalid typed input rejected before method entry does
+  not. The first request beyond `max_tool_steps` fails without an invocation or
+  business mutation.
 - `(case_execution_id, tool_call_id)` is unique.
 - Duplicate delivery cannot repeat a state-changing operation.
 - A stable call ID can replay only the same validated tool intent; reuse for a
@@ -264,8 +396,13 @@ API and worker processes share the same application code and PostgreSQL data.
 - JSON is allowed for naturally structured fixtures, provider/tool payloads, trace
   details, and grader evidence.
 - An experiment cannot become terminal from one case alone: while any execution is
-  nonterminal it is `running`; after all are terminal it is `failed` if any failed
-  or `completed` otherwise.
+  nonterminal, including `queued`, `running`, or `retrying`, it is `running`; after
+  all are terminal it is `failed` if any failed or `completed` otherwise.
+- Development/test fault plans are limited to the typed deterministic modes and a
+  selected case execution. Non-development/test API environments reject them, and
+  the executor independently refuses a persisted plan there.
+  Operational policy, attempts, dispatches, and fault plans do not participate in
+  immutable suite/case hashes.
 
 ## API contract
 
@@ -281,22 +418,37 @@ The V1 API provides endpoints equivalent to:
 - `POST /api/v1/experiments/{experiment_id}/retry-failures`
 
 The current API provides liveness/readiness, experiment submission, and sufficient
-experiment/execution retrieval to verify the complete slice. Experiment submission
-returns `202 Accepted` only after durable records exist and work has been accepted
-for background processing. The creation endpoint accepts an
-`Idempotency-Key`: compatible replay returns the existing experiment, and replay of
-an `enqueue_failed` experiment re-dispatches its existing executions. Concurrent
-requests for the same key are serialized by a PostgreSQL advisory lock held on one
-dedicated connection/session across durable persistence, enqueue, and dispatch
-outcome, so compatible requests converge on one experiment and one initial enqueue
-per selected execution.
-The current literal-fake-provider request shape still does not expose a broad
-conflicting-intent matrix. Wider crash-window recovery remains Phase 4 work.
-In particular, dispatching a multi-case experiment is not atomic across all Redis
-enqueue calls: a process failure after only some jobs are accepted still requires
-outbox-style reconciliation or recovery in Phase 4.
-Execution retrieval includes structured order shipping addresses and support
-tickets, and experiment retrieval exposes every v2 case execution.
+experiment/execution retrieval to inspect the complete queued slice. Experiment
+submission returns `202 Accepted` only after the experiment, executions, and
+initial dispatch intents commit in PostgreSQL. Immediate Redis publication reduces
+latency but is not an acceptance precondition; failure leaves the execution queued
+with a pending outbox row and safe dispatch error for later reconciliation.
+
+The creation endpoint accepts `max_attempts` (1–5), `job_timeout_seconds` (1–300),
+`max_tool_steps` (1–100), and `retry_backoff_seconds` (0–300). It also accepts one
+typed case-scoped deterministic fault plan only when the application environment is
+development or test. These settings and the fault plan are part of idempotent
+request intent. Reuse of an `Idempotency-Key` with a different suite, provider,
+policy, or fault plan returns `409`.
+
+Concurrent requests for one key are serialized by a PostgreSQL advisory lock on a
+dedicated connection/session while the API selects or creates the durable
+experiment/outbox state. The lock is released before best-effort Redis I/O because
+the outbox, not a network call under the key lock, now closes the crash window.
+Compatible replay returns the original identifiers and triggers targeted
+reconciliation for those executions. Its initial-work override applies only while
+an execution is `queued` or legacy `enqueue_failed`; a `retrying` execution remains
+gated by persisted `available_at`. Exact RQ identity/status checking and outbox
+uniqueness make concurrent or repeated reconciliation converge without multiplying
+a queued job. Ordinary maintenance also audits a dispatched-but-unclaimed current
+generation after 30 seconds and recovers missing or non-runnable exact jobs through
+the attempt budget.
+
+Experiment retrieval exposes policy and per-execution attempt counts. Execution
+retrieval includes structured order addresses and tickets plus the attempt count,
+current generation, lease/failure summary, ordered attempt records, and complete
+dispatch history. Summary and manual retry-failures endpoints remain target V1
+work, not current Phase 4 endpoints.
 
 ## Reproducibility and evidence
 
@@ -305,8 +457,10 @@ tickets, and experiment retrieval exposes every v2 case execution.
 - A case execution references an immutable evaluation case whose row stores the
   prompt, fixtures, expectations, and case hash; the suite row stores its version
   and suite hash. The execution stores provider selection, trial number, ordered
-  trace, final resolution, business-state linkage, and criterion-level results.
-  Phase 1 does not duplicate the case/prompt hash onto the execution row.
+  trace, final resolution, business-state linkage, criterion-level results, and
+  operational attempt/dispatch linkage. Phase 1 does not duplicate the case/prompt
+  hash onto the execution row, and Phase 4 operational records do not alter the
+  published v1/v2 definitions or their hashes.
 - Metrics are reported only when committed code produces them through a documented
   command.
 - Fake-provider results are labeled synthetic infrastructure validation, not
@@ -342,6 +496,17 @@ tickets, and experiment retrieval exposes every v2 case execution.
   tests in 52.51 seconds; the focused unit run passes 84 tests in 0.38 seconds, and
   the focused Phase 3 integration run passes 38 tests in 24.87 seconds. Each run
   emits one recorded dependency warning.
+- **Phase 4 resilience tests** cover conservative failure
+  classification, exact step accounting, transactional outbox recovery, exact RQ
+  duplicate identity and collision deferral, bounded retry/exhaustion, permanent
+  failure, timeout, rollback after post-tool failure, stale/duplicate delivery,
+  lease and pre-claim delivery recovery, missing/non-runnable RQ-job audit, typed
+  API fault intent and environment fail-closed behavior, and retrieval evidence.
+  The final full run collected and passed all 189 tests in 135.79 seconds with the
+  one known dependency deprecation warning. Live checks additionally exercised a
+  real RQ timeout, an actual worker SIGKILL, and Redis-outage outbox recovery. The
+  final three PostgreSQL cases cover terminal/missing legacy `enqueue_failed`
+  delivery and a recovered paused worker fenced before effects.
 - **End-to-end tests** cross the API, queue, worker, tools, persistence, grader, and
   retrieval boundary with the deterministic fake provider.
 - **Smoke tests** verify container startup, clean migration, liveness, and readiness
@@ -373,8 +538,9 @@ Phase 0/1/2/3 is complete only when every item below has been exercised and reco
 - The Phase 3 ownership migration upgrades a clean database to
   `20260822_0006`, downgrades to `20260822_0005`, re-upgrades to head, and reports
   no model drift.
-- Concurrent same-key API submissions converge while holding serialization through
-  the enqueue outcome, and execution retrieval exposes address/ticket state.
+- At the Phase 2/3 checkpoint, concurrent same-key API submissions converged while
+  holding serialization through the enqueue outcome, and execution retrieval
+  exposed address/ticket state. Phase 4's outbox supersedes that Redis lock span.
 - Ruff, mypy, and pytest pass.
 - GitHub Actions invokes commands consistent with local verification.
 - README setup commands have actually been exercised.
@@ -395,14 +561,26 @@ Phase 0/1/2/3 is complete only when every item below has been exercised and reco
 No checklist item may be inferred from code review alone when the criterion requires
 a running service or command.
 
+## Phase 4 definition of done
+
+Phase 4 completed locally after the implementation criteria in `PLAN.md` and every
+verification-dependent acceptance item there were checked from recorded evidence.
+That evidence includes the revision `20260822_0007` clean upgrade/downgrade/
+re-upgrade, legacy 300-second timeout preservation, `running`/`retrying` requeue,
+and generation-1 dispatch backfill path; final Ruff, formatting, mypy, and full
+PostgreSQL/Redis pytest runs; exact outbox duplicate/collision and partial-dispatch
+recovery; bounded transient/permanent/timeout/step-limit behavior; rollback/idempotency/
+isolation; fresh and expired lease behavior; the worker interruption path; API and
+pre-claim missing/unrunnable delivery recovery; retrieval contracts; Compose
+startup; and a documented recovery pass. `PROGRESS.md` records the exact local
+results. Commit, push, and remote CI remain separate, unclaimed events.
+
 ## Full V1 definition of done
 
-In addition to the Phase 0/1/2/3 foundation and the four implemented typed tools,
-V1 is done when bounded retries, timeout handling, duplicate-delivery protection,
-worker recovery, maximum-step enforcement,
-and fault injection are verified; aggregate experiment comparison and a small
-server-rendered report exist; and the documented 25-case, two-prompt,
-three-trial comparison can produce 150 raw, reproducible executions. The optional
-real-provider adapter and real run occur only after explicit approval. Final
-documentation must explain architecture, methodology, limitations, demo steps,
-provenance, and the precise source of every reported number.
+In addition to the completed Phase 0–4 foundation and the four implemented typed
+tools, V1 still requires aggregate experiment comparison, a small server-rendered
+report, and the documented 25-case, two-prompt, three-trial comparison producing 150 raw,
+reproducible executions. The optional real-provider adapter and real run occur only
+after explicit approval. Final documentation must explain architecture,
+methodology, limitations, demo steps, provenance, and the precise source of every
+reported number.

@@ -26,6 +26,11 @@ from evalguard.evaluation.fixture_models import (
     LookupPlanStep,
     UpdateAddressPlanStep,
 )
+from evalguard.evaluation.resilience import (
+    FaultMode,
+    inject_after_tools,
+    inject_before_provider,
+)
 
 if TYPE_CHECKING:
     from evalguard.evaluation.scenarios import ScenarioDefinition
@@ -74,8 +79,40 @@ class DeterministicFakeProvider:
 
     name = "deterministic-fake"
 
-    def __init__(self, *, behavior_id: str | FakeBehavior = FakeBehavior.REFERENCE) -> None:
+    def __init__(
+        self,
+        *,
+        behavior_id: str | FakeBehavior = FakeBehavior.REFERENCE,
+        fault_mode: str | FaultMode | None = None,
+        attempt_number: int = 1,
+        fail_attempts: int = 1,
+        timeout_seconds: int = 0,
+    ) -> None:
         self.behavior = FakeBehavior(behavior_id)
+        self.fault_mode = FaultMode(fault_mode) if fault_mode is not None else None
+        self.attempt_number = attempt_number
+        self.fail_attempts = fail_attempts
+        self.timeout_seconds = timeout_seconds
+
+    def _inject_before_provider(self) -> None:
+        if self.fault_mode is None:
+            return
+        inject_before_provider(
+            mode=self.fault_mode.value,
+            attempt_number=self.attempt_number,
+            fail_attempts=self.fail_attempts,
+            timeout_seconds=self.timeout_seconds,
+        )
+
+    def _inject_after_tools(self, *, steps_attempted: int) -> None:
+        if self.fault_mode is None:
+            return
+        inject_after_tools(
+            mode=self.fault_mode.value,
+            attempt_number=self.attempt_number,
+            fail_attempts=self.fail_attempts,
+            steps_attempted=steps_attempted,
+        )
 
     def run(
         self,
@@ -87,6 +124,7 @@ class DeterministicFakeProvider:
     ) -> dict[str, Any]:
         """Preserve the Phase 1 eligible-refund provider contract exactly."""
 
+        self._inject_before_provider()
         tools.trace(
             "provider_request",
             {"provider": self.name, "prompt": prompt, "synthetic": True},
@@ -103,6 +141,7 @@ class DeterministicFakeProvider:
             ),
             tool_call_id="fake-refund-1",
         )
+        self._inject_after_tools(steps_attempted=tools.steps_attempted)
         resolution: dict[str, Any] = {
             "status": "resolved",
             "action": "refund_issued",
@@ -127,6 +166,7 @@ class DeterministicFakeProvider:
     ) -> dict[str, Any]:
         """Execute a Phase 3 plan, optionally applying one deterministic defect."""
 
+        self._inject_before_provider()
         tools.trace(
             "provider_request",
             {
@@ -154,6 +194,7 @@ class DeterministicFakeProvider:
                         f"Plan step {step.tool_call_id} was expected to fail"
                     )
 
+        self._inject_after_tools(steps_attempted=tools.steps_attempted)
         resolution = self._build_resolution(definition, results, errors)
         tools.trace(
             "provider_response",

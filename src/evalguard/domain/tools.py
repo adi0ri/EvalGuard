@@ -27,6 +27,7 @@ from evalguard.domain.tool_schemas import (
     UpdateShippingAddressArgs,
     UpdateShippingAddressResult,
 )
+from evalguard.evaluation.resilience import StepBudget
 
 ADDRESS_CHANGEABLE_ORDER_STATUSES = frozenset({"pending", "processing"})
 HIGH_VALUE_REFUND_THRESHOLD_CENTS = 50_000
@@ -70,10 +71,18 @@ class ToolRuntime:
         case_execution_id: UUID,
         *,
         actor_customer_external_id: str | None = None,
+        max_tool_steps: int = 8,
     ) -> None:
         self.session = session
         self.case_execution_id = case_execution_id
         self.actor_customer_external_id = actor_customer_external_id
+        self._step_budget = StepBudget(limit=max_tool_steps)
+
+    @property
+    def steps_attempted(self) -> int:
+        """Return all requested tool calls, including replays and rejected calls."""
+
+        return self._step_budget.attempted_steps
 
     def trace(self, event_type: str, payload: dict[str, Any]) -> TraceEvent:
         return _record_trace(self.session, self.case_execution_id, event_type, payload)
@@ -239,6 +248,7 @@ class ToolRuntime:
         )
 
     def lookup_order(self, arguments: LookupOrderArgs, *, tool_call_id: str) -> LookupOrderResult:
+        self._step_budget.consume()
         self._lock_execution()
         cached = self._replay_cached(
             tool_call_id,
@@ -276,6 +286,7 @@ class ToolRuntime:
         return result
 
     def issue_refund(self, arguments: IssueRefundArgs, *, tool_call_id: str) -> IssueRefundResult:
+        self._step_budget.consume()
         self._lock_execution()
         cached = self._replay_cached(
             tool_call_id,
@@ -347,6 +358,7 @@ class ToolRuntime:
     ) -> UpdateShippingAddressResult:
         """Update an unshipped order, converging repeated semantic requests."""
 
+        self._step_budget.consume()
         self._lock_execution()
         cached = self._replay_cached(
             tool_call_id,
@@ -416,6 +428,7 @@ class ToolRuntime:
     ) -> EscalateTicketResult:
         """Create one durable escalation per execution, order, and reason code."""
 
+        self._step_budget.consume()
         self._lock_execution()
         cached = self._replay_cached(
             tool_call_id,

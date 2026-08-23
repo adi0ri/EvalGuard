@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from evalguard.evaluation.resilience import FaultMode
 from evalguard.evaluation.suite import PHASE3_SUITE_NAME, PHASE3_SUITE_VERSION
 
 
@@ -13,11 +14,24 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class FaultInjectionCreate(ApiModel):
+    """One deterministic execution fault, scoped to a selected case."""
+
+    case_key: str = Field(min_length=1, max_length=100)
+    mode: FaultMode
+    fail_attempts: int = Field(default=1, ge=1, le=5)
+
+
 class ExperimentCreate(ApiModel):
     suite_name: str = PHASE3_SUITE_NAME
     suite_version: str = PHASE3_SUITE_VERSION
     provider: Literal["deterministic-fake"] = "deterministic-fake"
     trials: Literal[1] = 1
+    max_attempts: int = Field(default=3, ge=1, le=5)
+    job_timeout_seconds: int = Field(default=30, ge=1, le=300)
+    max_tool_steps: int = Field(default=8, ge=1, le=100)
+    retry_backoff_seconds: int = Field(default=1, ge=0, le=300)
+    fault_injection: FaultInjectionCreate | None = None
 
 
 class SuiteSummary(ApiModel):
@@ -41,6 +55,7 @@ class ExecutionBrief(ApiModel):
     case_key: str
     trial_number: int
     status: str
+    attempt_count: int
 
 
 class ExperimentDetail(ApiModel):
@@ -51,6 +66,10 @@ class ExperimentDetail(ApiModel):
     provider: str
     status: str
     idempotency_key: str | None
+    max_attempts: int
+    job_timeout_seconds: int
+    max_tool_steps: int
+    retry_backoff_seconds: int
     created_at: datetime
     completed_at: datetime | None
     executions: list[ExecutionBrief]
@@ -77,6 +96,31 @@ class GraderResultRead(ApiModel):
     passed: bool
     message: str
     details: dict[str, Any]
+
+
+class ExecutionAttemptRead(ApiModel):
+    attempt_number: int
+    dispatch_generation: int
+    job_id: str
+    status: str
+    retryable: bool | None
+    failure_kind: str | None
+    error_message: str | None
+    step_count: int
+    started_at: datetime
+    lease_expires_at: datetime
+    completed_at: datetime | None
+
+
+class ExecutionDispatchRead(ApiModel):
+    generation: int
+    job_id: str
+    status: str
+    attempt_count: int
+    available_at: datetime
+    last_attempt_at: datetime | None
+    dispatched_at: datetime | None
+    last_error_kind: str | None
 
 
 class CustomerRead(ApiModel):
@@ -134,6 +178,15 @@ class ExecutionDetail(ApiModel):
     case_key: str
     trial_number: int
     status: str
+    attempt_count: int
+    max_attempts: int
+    job_timeout_seconds: int
+    max_tool_steps: int
+    retry_backoff_seconds: int
+    dispatch_generation: int
+    lease_expires_at: datetime | None
+    last_failure_kind: str | None
+    last_failure_retryable: bool | None
     final_resolution: dict[str, Any] | None
     error_message: str | None
     created_at: datetime
@@ -143,6 +196,8 @@ class ExecutionDetail(ApiModel):
     orders: list[OrderRead] = Field(default_factory=list)
     refunds: list[RefundRead] = Field(default_factory=list)
     support_tickets: list[SupportTicketRead] = Field(default_factory=list)
+    attempts: list[ExecutionAttemptRead] = Field(default_factory=list)
+    dispatches: list[ExecutionDispatchRead] = Field(default_factory=list)
     trace_events: list[TraceEventRead] = Field(default_factory=list)
     tool_invocations: list[ToolInvocationRead] = Field(default_factory=list)
     grader_results: list[GraderResultRead] = Field(default_factory=list)

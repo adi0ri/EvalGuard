@@ -12,9 +12,9 @@ from rq import Queue
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-import evalguard.api.routes as experiment_routes
+import evalguard.workers.dispatch as execution_dispatcher
 from evalguard.api.app import create_app
-from evalguard.db.models import CaseExecution, Experiment
+from evalguard.db.models import CaseExecution, ExecutionDispatch, Experiment
 from evalguard.domain.tool_schemas import (
     EscalateTicketArgs,
     ShippingAddress,
@@ -58,6 +58,13 @@ def test_create_experiment_returns_202_after_records_are_persisted_and_queued(
     assert len(executions) == PHASE3_CASE_COUNT
     assert {execution.id for execution in executions} == execution_ids
     assert all(execution.status == "queued" for execution in executions)
+    dispatches = db_session.scalars(
+        select(ExecutionDispatch).where(ExecutionDispatch.case_execution_id.in_(execution_ids))
+    ).all()
+    assert len(dispatches) == PHASE3_CASE_COUNT
+    assert all(dispatch.generation == 1 for dispatch in dispatches)
+    assert all(dispatch.status == "dispatched" for dispatch in dispatches)
+    assert all(dispatch.attempt_count == 1 for dispatch in dispatches)
     assert set(rq_queue.job_ids) == {
         f"case-execution-{execution_id}" for execution_id in execution_ids
     }
@@ -88,6 +95,12 @@ def test_explicit_phase1_suite_submission_remains_available(
     execution = db_session.get(CaseExecution, execution_id)
     assert execution is not None
     assert execution.status == "queued"
+    dispatch = db_session.scalar(
+        select(ExecutionDispatch).where(ExecutionDispatch.case_execution_id == execution_id)
+    )
+    assert dispatch is not None
+    assert dispatch.status == "dispatched"
+    assert dispatch.attempt_count == 1
     assert rq_queue.job_ids == [f"case-execution-{execution_id}"]
 
 
@@ -106,7 +119,7 @@ def test_readiness_exercises_live_postgres_and_redis(
     }
 
 
-def test_idempotent_retry_requeues_an_enqueue_failure(
+def test_idempotent_replay_reconciles_a_durable_dispatch_failure(
     client: TestClient,
     seeded_suite: object,
     db_session: Session,
@@ -114,18 +127,18 @@ def test_idempotent_retry_requeues_an_enqueue_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del seeded_suite
-    real_enqueue = experiment_routes.enqueue_execution
+    real_enqueue = execution_dispatcher.enqueue_execution
 
-    def fail_enqueue(_: UUID) -> None:
+    def fail_enqueue(*_: object, **__: object) -> None:
         raise OSError("synthetic Redis dispatch failure")
 
-    monkeypatch.setattr(experiment_routes, "enqueue_execution", fail_enqueue)
+    monkeypatch.setattr(execution_dispatcher, "enqueue_execution", fail_enqueue)
     first = client.post(
         "/api/v1/experiments",
         json={"provider": "deterministic-fake", "trials": 1},
         headers={"Idempotency-Key": "retry-enqueue-failure"},
     )
-    assert first.status_code == 503
+    assert first.status_code == 202
 
     experiment = db_session.scalar(
         select(Experiment).where(Experiment.idempotency_key == "retry-enqueue-failure")
@@ -133,14 +146,32 @@ def test_idempotent_retry_requeues_an_enqueue_failure(
     assert experiment is not None
     db_session.refresh(experiment)
     original_id = experiment.id
-    assert experiment.status == "enqueue_failed"
-    failed_executions = db_session.scalars(
+    assert experiment.status == "queued"
+    queued_executions = db_session.scalars(
         select(CaseExecution).where(CaseExecution.experiment_id == experiment.id)
     ).all()
-    assert len(failed_executions) == PHASE3_CASE_COUNT
-    assert all(execution.status == "enqueue_failed" for execution in failed_executions)
+    assert len(queued_executions) == PHASE3_CASE_COUNT
+    assert all(execution.status == "queued" for execution in queued_executions)
+    pending_dispatches = db_session.scalars(
+        select(ExecutionDispatch)
+        .join(CaseExecution, CaseExecution.id == ExecutionDispatch.case_execution_id)
+        .where(CaseExecution.experiment_id == experiment.id)
+        .order_by(ExecutionDispatch.created_at, ExecutionDispatch.id)
+    ).all()
+    assert len(pending_dispatches) == PHASE3_CASE_COUNT
+    assert all(dispatch.status == "pending" for dispatch in pending_dispatches)
+    assert sum(dispatch.attempt_count for dispatch in pending_dispatches) == 1
+    failed_dispatches = [
+        dispatch for dispatch in pending_dispatches if dispatch.last_error_kind is not None
+    ]
+    assert len(failed_dispatches) == 1
+    assert failed_dispatches[0].attempt_count == 1
+    assert failed_dispatches[0].last_error_kind == "OSError"
+    assert failed_dispatches[0].last_attempt_at is not None
+    assert failed_dispatches[0].dispatched_at is None
+    assert rq_queue.job_ids == []
 
-    monkeypatch.setattr(experiment_routes, "enqueue_execution", real_enqueue)
+    monkeypatch.setattr(execution_dispatcher, "enqueue_execution", real_enqueue)
     retry = client.post(
         "/api/v1/experiments",
         json={"provider": "deterministic-fake", "trials": 1},
@@ -162,6 +193,20 @@ def test_idempotent_retry_requeues_an_enqueue_failure(
     assert set(rq_queue.job_ids) == {
         f"case-execution-{execution_id}" for execution_id in retried_execution_ids
     }
+    db_session.expire_all()
+    reconciled_dispatches = db_session.scalars(
+        select(ExecutionDispatch)
+        .join(CaseExecution, CaseExecution.id == ExecutionDispatch.case_execution_id)
+        .where(CaseExecution.experiment_id == original_id)
+    ).all()
+    assert len(reconciled_dispatches) == PHASE3_CASE_COUNT
+    assert all(dispatch.status == "dispatched" for dispatch in reconciled_dispatches)
+    assert all(dispatch.last_error_kind is None for dispatch in reconciled_dispatches)
+    assert all(dispatch.dispatched_at is not None for dispatch in reconciled_dispatches)
+    assert sorted(dispatch.attempt_count for dispatch in reconciled_dispatches) == [
+        *([1] * (PHASE3_CASE_COUNT - 1)),
+        2,
+    ]
 
 
 def test_concurrent_idempotency_key_submissions_create_one_experiment(
@@ -174,11 +219,11 @@ def test_concurrent_idempotency_key_submissions_create_one_experiment(
     enqueue_attempts: list[UUID] = []
     enqueue_attempts_lock = Lock()
 
-    def record_enqueue(execution_id: UUID) -> None:
+    def record_enqueue(execution_id: UUID, *_: object, **__: object) -> None:
         with enqueue_attempts_lock:
             enqueue_attempts.append(execution_id)
 
-    monkeypatch.setattr(experiment_routes, "enqueue_execution", record_enqueue)
+    monkeypatch.setattr(execution_dispatcher, "enqueue_execution", record_enqueue)
 
     def submit() -> tuple[int, dict[str, object]]:
         start.wait(timeout=5)
@@ -202,9 +247,13 @@ def test_concurrent_idempotency_key_submissions_create_one_experiment(
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Experiment)) == 1
         assert session.scalar(select(func.count()).select_from(CaseExecution)) == PHASE3_CASE_COUNT
+        dispatches = session.scalars(select(ExecutionDispatch)).all()
+        assert len(dispatches) == PHASE3_CASE_COUNT
+        assert all(dispatch.status == "dispatched" for dispatch in dispatches)
+        assert all(dispatch.attempt_count == 1 for dispatch in dispatches)
 
 
-def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
+def test_concurrent_idempotent_submissions_reconcile_a_partial_dispatch(
     seeded_suite: object,
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
@@ -216,7 +265,7 @@ def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
     enqueue_attempts: list[UUID] = []
     enqueue_attempts_lock = Lock()
 
-    def controlled_enqueue(execution_id: UUID) -> None:
+    def controlled_enqueue(execution_id: UUID, *_: object, **__: object) -> None:
         with enqueue_attempts_lock:
             enqueue_attempts.append(execution_id)
             attempt_number = len(enqueue_attempts)
@@ -226,7 +275,7 @@ def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
                 raise TimeoutError("Test did not release the first dispatch attempt")
             raise OSError("synthetic concurrent dispatch failure")
 
-    monkeypatch.setattr(experiment_routes, "enqueue_execution", controlled_enqueue)
+    monkeypatch.setattr(execution_dispatcher, "enqueue_execution", controlled_enqueue)
 
     def submit() -> tuple[int, dict[str, object]]:
         start.wait(timeout=5)
@@ -242,12 +291,13 @@ def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
         futures = [pool.submit(submit) for _ in range(2)]
         try:
             assert first_dispatch_started.wait(timeout=5)
-            assert all(not future.done() for future in futures)
         finally:
             release_first_dispatch.set()
         responses = [future.result(timeout=10) for future in futures]
 
-    assert sorted(status_code for status_code, _ in responses) == [202, 503]
+    assert [status_code for status_code, _ in responses] == [202, 202]
+    assert len({str(payload["id"]) for _, payload in responses}) == 1
+    assert len({str(payload["execution_ids"]) for _, payload in responses}) == 1
     assert len(enqueue_attempts) == PHASE3_CASE_COUNT + 1
     assert enqueue_attempts[0] in enqueue_attempts[1:]
     assert len(set(enqueue_attempts)) == PHASE3_CASE_COUNT
@@ -265,6 +315,15 @@ def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
         ).all()
         assert len(executions) == PHASE3_CASE_COUNT
         assert all(execution.status == "queued" for execution in executions)
+        dispatches = session.scalars(
+            select(ExecutionDispatch)
+            .join(CaseExecution, CaseExecution.id == ExecutionDispatch.case_execution_id)
+            .where(CaseExecution.experiment_id == experiment.id)
+        ).all()
+        assert len(dispatches) == PHASE3_CASE_COUNT
+        assert all(dispatch.status == "dispatched" for dispatch in dispatches)
+        assert sum(dispatch.attempt_count for dispatch in dispatches) == PHASE3_CASE_COUNT + 1
+        assert sum(dispatch.attempt_count == 2 for dispatch in dispatches) == 1
 
 
 def test_execution_retrieval_includes_shipping_address_and_escalation(

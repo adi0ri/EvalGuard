@@ -277,7 +277,8 @@ remain the final backstop, and concurrent/rollback tests exercise these boundari
 
 ## 2026-08-22 — D015: Serialize experiment idempotency keys across persistence and dispatch outcome
 
-**Status:** Accepted for Phase 2.
+**Status:** Accepted for Phase 2; current Redis-dispatch handling is superseded by
+D020 while the durable same-key serialization principle remains.
 
 **Reason:** A unique database constraint prevents two experiments from committing
 with the same idempotency key, but it does not by itself give two simultaneous HTTP
@@ -409,6 +410,182 @@ boundaries for strings to avoid substring false positives such as `US` inside
 `CUSTOMER`, and recognize grouped numeric values such as `9,125` in free text.
 Targeted PostgreSQL runs now exercise all ten defective fake behaviors. The final
 local suite passes 158 tests, and the final synthetic live run persists 507 passing
-criteria. Multi-job Redis
-dispatch is still not atomic: partial enqueue crash-window and outbox-style recovery
-remain Phase 4 work.
+criteria. At the Phase 3 close, multi-job Redis dispatch was still non-atomic and
+the partial-enqueue crash window was explicitly deferred. D020 records the Phase 4
+transactional-outbox decision that subsequently closes that window.
+
+## 2026-08-22 — D020: Make PostgreSQL dispatch intent durable before best-effort RQ publication
+
+**Status:** Accepted for Phase 4; supersedes D015's current requirement to hold an
+idempotency advisory lock through Redis outcome.
+
+**Reason:** Committing 25 executions and then enqueueing 25 independent Redis jobs
+left a process-crash window in which only a prefix was dispatched and no durable
+record identified the remainder. A same-key advisory lock could serialize HTTP
+requests but could neither make PostgreSQL and Redis atomic nor recover work after
+the API process disappeared. Accepted work must remain recoverable even when Redis
+is unavailable.
+
+**Alternatives:** Holding the experiment transaction open across all Redis calls
+would hide rows from workers, lengthen locks, and still not give a distributed
+commit. Treating RQ as truth would make acceptance depend on Redis retention.
+Marking executions `enqueue_failed` would turn a transport outage into product
+failure and still not repair a partial prefix. A two-phase distributed transaction
+would add machinery unsupported by this topology.
+
+**Consequences:** The API atomically commits each new `CaseExecution` with one
+generation-1 `ExecutionDispatch`, then releases any idempotency advisory lock and
+makes a best-effort initial reconciliation pass. It returns `202` after the
+PostgreSQL commit even if immediate publication fails. That pass may bypass
+`available_at` only for pending executions still `queued` (or legacy
+`enqueue_failed`), never for an execution already `retrying`. Compatible same-key
+replay returns the original identifiers and targets those same durable executions,
+so it repairs initial publication without collapsing a scheduled retry delay.
+
+Each dispatch is unique by execution/generation and by stable job ID. Generation 1
+preserves the legacy ID; later generations add a suffix. If RQ reports a duplicate,
+EvalGuard accepts it only after queue origin, function, positional arguments, and
+empty keyword arguments, configured timeout, and runnable status match exactly.
+Generation-1 jobs using the pre-Phase-4 one-argument/300-second-timeout identity
+remain compatible only when their experiment's persisted timeout policy is 300
+seconds; a new 30-second experiment rejects that legacy shape. Before claim, the
+worker validates the live job against the persisted dispatch identity and
+experiment timeout again. This closes the enqueue-success/database-commit crash
+window without trusting queue contents; a mismatch consumes no execution attempt,
+and reconciliation keeps the dispatch pending with
+`DispatchIdentityError` rather than running someone else's intent.
+
+General reconcilers lock one due row with `FOR UPDATE SKIP LOCKED`; explicit ID
+replay uses a blocking row lock. Each attempt commits in its own transaction.
+Identity errors defer that row and allow the pass to continue; Redis/OSError
+transport failures record a safe class, apply base backoff with a multiplier capped
+at 32, and stop the pass to avoid hammering the transport. Publication transport
+attempts are open-ended and do not consume the bounded provider/tool attempt budget.
+
+Worker startup/maintenance and the bounded `evalguard reconcile` command also
+audit a current dispatched row when its execution is still queued, retrying, or
+legacy `enqueue_failed` and no durable claim appears within 30 seconds. An exact RQ job in queued, started,
+deferred, or scheduled status remains untouched. A missing or exact-but-unrunnable
+job is an abandoned pre-claim delivery: recovery verifies execution generation and
+persisted job ID, creates one interrupted attempt (thereby consuming the bounded
+execution budget), then advances the generation or fails at exhaustion. An
+identity-mismatched job is never converted into an attempt. This audit covers Redis
+job disappearance and terminal RQ state without resurrecting a stale generation.
+
+Local Phase 4 acceptance exercised the decision with Redis stopped: submission
+still returned `202`, the execution remained queued with a pending dispatch and no
+attempt, and worker reconciliation completed it once Redis returned. Compatible
+replay and the 25-case baseline retained one logical delivery per generation.
+
+## 2026-08-22 — D021: Own retries in PostgreSQL with attempt generations and leases
+
+**Status:** Accepted and locally verified for Phase 4.
+
+**Reason:** RQ can interrupt a timed-out job and can observe unexpected work-horse
+termination, but RQ job state alone cannot express EvalGuard's durable attempt
+budget, failure classification, business rollback, or current execution
+generation. Duplicate/stale delivery and a worker that dies after claiming work
+must converge under PostgreSQL locks.
+
+**Alternatives:** RQ's generic retry configuration is useful, but it would make
+Redis own the retry count/schedule rather than the retrievable experiment contract.
+Retrying every exception would hide defects and risk repeated effects. Never
+retrying would make explicit transient faults and timeouts terminal. Treating every
+running row as abandoned would race live execution.
+
+**Consequences:** An experiment persists `max_attempts`, `job_timeout_seconds`, and
+`retry_backoff_seconds`. Revision `20260822_0007` preserves the former queue
+default by backfilling existing experiments at 300 seconds, while newly created
+experiments use the 30-second application default. The revision requeues legacy
+`running` and `retrying` executions because neither has a durable Phase 4 lease,
+then creates pending generation-1 dispatch rows only for queued or legacy
+`enqueue_failed` executions. A delivery locks its execution, requires the current
+dispatch generation, refuses a second claim while running, and creates one unique
+`ExecutionAttempt`. Terminal, busy, and stale deliveries return without invoking
+provider/tools. After claim, the executor reacquires the execution lock and
+revalidates attempt number, dispatch generation, and `running` status before any
+provider/tool work, so recovery fences a paused former owner. Retry/recovery
+advances the generation exactly once. Execution
+delays start at the configured base, double per failed attempt, and cap at 300
+seconds; a new attempt is scheduled only while `attempt_number < max_attempts`.
+
+If a current job disappears or becomes non-runnable before it commits a claim, the
+delivery audit records an `interrupted` attempt with zero steps before advancing
+the generation. The job wrapper also attempts that exact pre-claim recovery when
+claim setup itself raises. This deliberately spends one execution attempt because
+RQ accepted a generation whose outcome cannot otherwise be proven; generation/job
+checks and the execution lock prevent duplicate charging.
+
+Failure classification is deliberately conservative: injected transient failures,
+RQ timeout, and worker interruption are retryable; maximum-tool-step, injected
+permanent, and unexpected exceptions are terminal. Safe kind/message, retryability,
+step count, attempt outcome, and retry/recovery trace persist after the atomic
+provider/tool transaction rolls back. EvalGuard does not claim arbitrary network
+exceptions are transient.
+
+The configured timeout is passed explicitly as RQ `job_timeout`, whose official
+[job documentation](https://python-rq.org/docs/jobs/) defines it as the maximum
+runtime before interruption/failure. A caught `JobTimeoutException` is recorded and
+scheduled under EvalGuard's budget before being re-raised for RQ. The attempt lease
+uses PostgreSQL start time plus the timeout and two seconds of grace. Periodic
+recovery locks only expired running work; the executor's execution-row lock prevents
+a live transaction from being reclaimed. RQ's documented
+[work-horse killed handler](https://python-rq.org/docs/exceptions/) provides a fast
+path that revalidates the same persisted job identity and timeout before consuming
+an interruption attempt. Worker startup and the custom
+[maintenance cycle](https://python-rq.org/docs/workers/) run stale recovery before
+dispatch reconciliation. Local acceptance proved the timeout path with a real
+one-second RQ limit and the termination path by sending SIGKILL to an actively
+leased worker; both persisted the retryable failure, advanced from generation 1 to
+2, and completed without a duplicate refund.
+
+## 2026-08-22 — D022: Count attempted public tool calls and keep resilience faults operational
+
+**Status:** Accepted for Phase 4.
+
+**Reason:** A maximum-step policy is ambiguous unless replay, rejection, and the
+first over-budget call have deterministic treatment. Fault injection also must not
+silently alter an immutable evaluation definition or expose synthetic failure
+controls as production behavior.
+
+**Alternatives:** Counting only successful invocations would let cached/error loops
+evade the budget. Counting provider planning or typed validation would couple the
+limit to adapter internals rather than tool requests. Adding faults to v2 case plans
+would change published hashes; enabling them in production would make the API a
+general chaos-control surface. A new resilience grader family would overstate the
+implemented design, which stores operational attempt/dispatch evidence and tests
+but no new `GraderResult` family.
+
+**Consequences:** One step is consumed at entry to any public `ToolRuntime` method,
+before execution locking or cached invocation lookup. Successful mutation/read,
+policy or ownership error, semantic no-op, cached-success replay, and persisted-
+error replay all count. Typed argument validation that fails before method entry
+does not. Requests through N are allowed; request N+1 increments the attempted
+count and raises `MaximumToolStepsExceeded` before creating an invocation, trace, or
+business mutation. Step count is per execution attempt.
+
+Successful attempts, maximum-step exceptions, and injected post-tool failures
+provide exact attempted-step counts. If some other exception does not carry an
+`attempted_steps` or `steps_attempted` attribute, its durable attempt records 0
+rather than inferring from rolled-back trace evidence.
+
+One execution-scoped `ExecutionFaultPlan` may select a typed deterministic mode:
+transient before provider, transient after tools, timeout, permanent before
+provider, or worker interruption, with an explicit number of affected attempts.
+The API accepts it only in development/test and includes the complete plan in
+idempotency intent. The executor independently refuses a persisted plan outside
+development/test, so a direct database write cannot silently enable synthetic
+fault behavior in another environment. A post-tool injected failure demonstrates
+that the original single execution transaction rolls back fixtures, state, tool
+evidence, grader rows, and resolution before separate retry evidence commits.
+
+Fault plans, retry policy, attempts, dispatches, and leases are operational state;
+they do not change `parceldesk-refunds@1.0.0`, `@2.0.0`, any case/fake plan/grader
+definition, or the verified hashes. Their deterministic-fake output remains
+synthetic infrastructure validation. Phase 5 comparison/reporting and Phase 6 real
+provider work remain outside this decision.
+
+The final Phase 4 suite and live checks verified exact N/N+1 accounting,
+post-tool rollback before retry, single-case fault isolation in the 25-case suite,
+and production-environment fault-plan rejection. Those results validate this
+operational decision without adding a grader family or changing either suite hash.

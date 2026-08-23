@@ -21,8 +21,9 @@ from evalguard.db.models import (
     ToolInvocation,
     TraceEvent,
 )
+from evalguard.workers.dispatch import create_dispatch, reconcile_pending_dispatches
 from evalguard.workers.jobs import run_case_execution
-from evalguard.workers.queue import enqueue_execution
+from evalguard.workers.queue import job_id_for_execution
 
 pytestmark = pytest.mark.integration
 
@@ -34,7 +35,16 @@ def test_simple_worker_persists_state_trace_and_grades(
     rq_queue: Queue,
 ) -> None:
     execution_id = execution_factory(materialize_state=False)
-    job = enqueue_execution(execution_id)
+    with session_factory.begin() as session:
+        create_dispatch(session, execution_id, generation=1)
+    dispatched = reconcile_pending_dispatches(
+        execution_ids=[execution_id],
+        force=True,
+        connection=redis_connection,
+    )
+    assert dispatched.dispatched == 1
+    job = rq_queue.fetch_job(job_id_for_execution(execution_id, 1))
+    assert job is not None
     worker = SimpleWorker([rq_queue], connection=redis_connection)
 
     worked = worker.work(burst=True, logging_level="WARNING", with_scheduler=False)
@@ -47,6 +57,7 @@ def test_simple_worker_persists_state_trace_and_grades(
         experiment = session.get(Experiment, execution.experiment_id)
         assert experiment is not None
         assert execution.status == "completed"
+        assert execution.attempt_count == 1
         assert experiment.status == "completed"
         assert execution.completed_at is not None
         assert experiment.completed_at is not None
@@ -167,8 +178,16 @@ def test_failed_job_records_durable_terminal_state_and_trace(
         experiment = session.get(Experiment, execution.experiment_id)
         assert experiment is not None
         experiment.provider = "unsupported-provider"
+        create_dispatch(session, execution_id, generation=1)
 
-    job = enqueue_execution(execution_id)
+    dispatched = reconcile_pending_dispatches(
+        execution_ids=[execution_id],
+        force=True,
+        connection=redis_connection,
+    )
+    assert dispatched.dispatched == 1
+    job = rq_queue.fetch_job(job_id_for_execution(execution_id, 1))
+    assert job is not None
     worker = SimpleWorker([rq_queue], connection=redis_connection)
     assert worker.work(burst=True, logging_level="CRITICAL", with_scheduler=False) is True
     assert job.get_status(refresh=True) == JobStatus.FAILED
@@ -177,6 +196,9 @@ def test_failed_job_records_durable_terminal_state_and_trace(
         execution = session.get(CaseExecution, execution_id)
         assert execution is not None
         assert execution.status == "failed"
+        assert execution.attempt_count == 1
+        assert execution.last_failure_kind == "unexpected"
+        assert execution.last_failure_retryable is False
         assert execution.started_at is not None
         assert execution.completed_at is not None
         traces = session.scalars(
@@ -188,5 +210,8 @@ def test_failed_job_records_durable_terminal_state_and_trace(
         assert traces[0].payload == {
             "error_type": "UnsupportedProviderError",
             "message": "unsupported-provider",
+            "failure_kind": "unexpected",
             "retryable": False,
+            "attempt_number": 1,
+            "attempts_exhausted": False,
         }

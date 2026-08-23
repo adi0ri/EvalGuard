@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -84,6 +85,22 @@ class Experiment(Base):
     __table_args__ = (
         UniqueConstraint("idempotency_key", name="uq_experiments_idempotency_key"),
         Index("ix_experiments_suite_status", "suite_id", "status"),
+        CheckConstraint(
+            "max_attempts BETWEEN 1 AND 5",
+            name="max_attempts_range",
+        ),
+        CheckConstraint(
+            "job_timeout_seconds BETWEEN 1 AND 300",
+            name="job_timeout_seconds_range",
+        ),
+        CheckConstraint(
+            "max_tool_steps BETWEEN 1 AND 100",
+            name="max_tool_steps_range",
+        ),
+        CheckConstraint(
+            "retry_backoff_seconds BETWEEN 0 AND 300",
+            name="retry_backoff_seconds_range",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -95,6 +112,10 @@ class Experiment(Base):
     provider: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    job_timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    max_tool_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
+    retry_backoff_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now
     )
@@ -112,6 +133,14 @@ class CaseExecution(Base):
         ),
         Index("ix_case_executions_experiment_status", "experiment_id", "status"),
         Index("ix_case_executions_case_id", "case_id"),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="attempt_count_nonnegative",
+        ),
+        CheckConstraint(
+            "dispatch_generation >= 1",
+            name="dispatch_generation_positive",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -127,6 +156,13 @@ class CaseExecution(Base):
     )
     trial_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="queued")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dispatch_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_failure_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    last_failure_retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     final_resolution: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -134,6 +170,144 @@ class CaseExecution(Base):
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ExecutionAttempt(Base):
+    __tablename__ = "execution_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_execution_id",
+            "attempt_number",
+            name="uq_execution_attempts_execution_number",
+        ),
+        Index(
+            "ix_execution_attempts_execution_status",
+            "case_execution_id",
+            "status",
+        ),
+        Index(
+            "ix_execution_attempts_status_lease",
+            "status",
+            "lease_expires_at",
+        ),
+        CheckConstraint(
+            "attempt_number >= 1",
+            name="attempt_number_positive",
+        ),
+        CheckConstraint(
+            "dispatch_generation >= 1",
+            name="dispatch_generation_positive",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'retry_scheduled', 'failed', 'interrupted')",
+            name="status_allowed",
+        ),
+        CheckConstraint(
+            "step_count >= 0",
+            name="step_count_nonnegative",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    case_execution_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("case_executions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    dispatch_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    job_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    failure_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ExecutionDispatch(Base):
+    __tablename__ = "execution_dispatches"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_execution_id",
+            "generation",
+            name="uq_execution_dispatches_execution_generation",
+        ),
+        UniqueConstraint("job_id", name="uq_execution_dispatches_job_id"),
+        Index(
+            "ix_execution_dispatches_due",
+            "status",
+            "available_at",
+        ),
+        CheckConstraint(
+            "generation >= 1",
+            name="generation_positive",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'dispatched')",
+            name="status_allowed",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="attempt_count_nonnegative",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4)
+    case_execution_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("case_executions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    job_id: Mapped[str] = mapped_column(String(150), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+
+class ExecutionFaultPlan(Base):
+    __tablename__ = "execution_fault_plans"
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ("
+            "'transient_before_provider', "
+            "'transient_after_tools', "
+            "'timeout', "
+            "'permanent_before_provider', "
+            "'worker_interruption'"
+            ")",
+            name="mode_allowed",
+        ),
+        CheckConstraint(
+            "fail_attempts >= 1",
+            name="fail_attempts_positive",
+        ),
+    )
+
+    case_execution_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("case_executions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    mode: Mapped[str] = mapped_column(String(50), nullable=False)
+    fail_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
 
 
 class TraceEvent(Base):

@@ -4,15 +4,21 @@ Last updated: 2026-08-22
 
 ## Current milestone
 
-**Phase 3 — complete locally.** The immutable 25-case v2 suite, actor-scoped tools, six deterministic
-grader families, eleven fake behavior IDs, aggregate experiment lifecycle, explicit
-replay evidence, and relational ticket/order owner enforcement are implemented. The
-full PostgreSQL/Redis-backed run passes all 158 tests, and locked installation,
-static checks, the `20260822_0006` migration round trip, Compose startup, idempotent
-live seeding, the live 25-case smoke, and the Redis-unavailable readiness probe have
-passed. Documentation/secret reconciliation and local commit `083808c` are complete.
-Phase 3 is not pushed and no remote CI result is claimed; neither is a local
-acceptance prerequisite. Phase 4 and later remain backlog only.
+**Phase 4 — implementation and local acceptance complete.** The PostgreSQL
+transactional outbox, execution attempts/generations/leases, bounded retry and RQ
+timeout policy, exact tool-step budget, worker/CLI recovery, typed development/test
+fault plans, and retrieval evidence are implemented. Phase 4 adds no suite or case
+content: published `parceldesk-refunds@1.0.0` and `@2.0.0` and their hashes remain
+unchanged. All local acceptance checkboxes below are verified from exact evidence
+in `PROGRESS.md`: 189 tests passed, revision `0007` completed its migration/backfill
+round trip, and Compose/live timeout/interruption/outage recovery passed. A local
+Phase 4 commit is pending; nothing from Phase 4 is pushed and no remote-CI result is
+claimed. Phase 5 and later remain out of scope and have not started.
+
+Phase 3 remains complete locally with its recorded 158-test, migration, Compose,
+live-smoke, and readiness evidence. Commits `083808c` and `6655e79` are pushed;
+local `main` and `origin/main` are at `6655e79`. No Phase 3 remote-CI result is
+claimed; it is not a Phase 3 local-acceptance prerequisite.
 
 ## Phase 0 — repository and architecture foundation
 
@@ -290,12 +296,127 @@ queued deterministic breadth without mutating that historical definition.
 - [x] Complete the final documentation/provenance/secret audit and local Phase 3
   commit `083808c`.
 
+## Phase 4 — resilience
+
+### Durable acceptance and queue dispatch
+
+- [x] Add revision `20260822_0007` with persisted experiment retry/timeout/step/
+  backoff policy, case-execution attempt/generation/lease summaries,
+  `execution_attempts`, `execution_dispatches`, and development/test
+  `execution_fault_plans`. Preserve the legacy 300-second timeout on existing
+  experiments, reset legacy `running`/`retrying` executions to `queued`, and
+  backfill pending generation-1 dispatches only for queued or legacy
+  `enqueue_failed` work; new experiments default to 30 seconds.
+- [x] Atomically create every generation-1 dispatch intent with its case execution,
+  then return `202 Accepted` after PostgreSQL commit even when immediate Redis
+  publication fails.
+- [x] Reconcile current pending dispatches one locked row/transaction at a time,
+  using `FOR UPDATE SKIP LOCKED` for general sweeps, blocking locks for explicit
+  IDs, capped publication backoff, and early stop after a Redis/transport failure.
+- [x] Retain the legacy generation-1 RQ job ID and use generation-qualified IDs for
+  retries; accept a duplicate only when origin queue, function, positional
+  arguments, empty keyword arguments, configured timeout, and runnable status match
+  exactly. Preserve the pre-Phase-4 one-argument generation-1 identity only for a
+  persisted 300-second policy; reject it for a new 30-second policy. Validate live
+  RQ delivery against the persisted dispatch and timeout before claim. Persist
+  identity collisions as pending safe failures rather than running a foreign job
+  or consuming an execution attempt.
+- [x] Make compatible `Idempotency-Key` replay return the original identifiers and
+  trigger targeted reconciliation of the same durable executions without
+  publishing a `retrying` execution before `available_at`; only queued or legacy
+  `enqueue_failed` initial work receives the override. Treat resilience policy and
+  typed fault intent as part of the conflict check, and release the API advisory
+  lock before best-effort Redis I/O now that PostgreSQL owns recovery.
+- [x] Audit current dispatched-but-unclaimed queued/retrying/legacy
+  `enqueue_failed` generations after 30 seconds. Leave exact runnable RQ jobs alone;
+  turn a missing or exact-but-
+  unrunnable job into one generation/job-checked pre-claim interruption that
+  consumes the bounded attempt budget, then advances or exhausts. Never claim an
+  identity mismatch.
+
+### Attempts, retries, timeouts, and recovery
+
+- [x] Claim attempts under an execution-row lock and persist attempt number,
+  dispatch generation/job ID, lease, status, step count, retryability, safe failure
+  kind/message, and completion time. Before provider/tool work, revalidate the
+  expected attempt number, generation, and `running` status under that same lock so
+  recovery fences a paused worker.
+- [x] Ignore stale generations, concurrent/busy duplicates, and terminal replay
+  without invoking provider/tools; increment the generation exactly once for each
+  scheduled retry or interruption recovery.
+- [x] Retry only typed transient, timeout, and worker-interruption failures while
+  `attempt_number < max_attempts`; fail unexpected, injected permanent, and
+  maximum-step errors without retry. Double execution retry delay from the
+  persisted base and cap it at 300 seconds.
+- [x] Pass `job_timeout_seconds` explicitly to RQ, persist timeout as retryable
+  before re-raising RQ's timeout exception, and derive a PostgreSQL-time lease from
+  the timeout plus recovery grace.
+- [x] Recover the exact generation/job from RQ's work-horse termination hook, and
+  recover only expired running attempts during bounded startup/maintenance or CLI
+  sweeps while respecting execution locks and attempt budgets. Recover exact
+  current work that fails before claim as a zero-step interrupted attempt.
+
+### Tool budget, fault plans, atomicity, and evidence
+
+- [x] Define one tool step as entry into any public `ToolRuntime` method, consumed
+  before lock/replay lookup. Count success, policy/ownership errors, semantic
+  no-ops, cached-success replay, and persisted-error replay; do not count typed
+  validation rejected before method entry. Allow exactly the configured limit and
+  reject counted step N+1 before invocation/mutation.
+- [x] Add one typed deterministic fault plan for one selected case, accepted only
+  in development/test, with transient-before-provider, transient-after-tools,
+  timeout, permanent-before-provider, and worker-interruption modes. Make the
+  executor independently fail closed if a persisted plan appears elsewhere.
+- [x] Preserve the atomic deterministic execution transaction so a failed attempt
+  rolls back fixtures, state mutations, invocations, normal trace, graders, and
+  resolution together, then record retry/failure evidence separately. Reuse the
+  existing execution/actor isolation, execution-then-order lock order, exact
+  replay, semantic convergence, and PostgreSQL uniqueness on retry.
+- [x] Expose experiment resilience policy and execution attempt count; expose
+  execution policy, generation, lease/failure summary, ordered attempts, and
+  dispatch history.
+- [x] Keep immutable v1/v2 suites, case payloads, fake plans, grader families, and
+  verified hashes unchanged. Label all Phase 4 deterministic fault behavior as
+  synthetic infrastructure validation, not model reliability.
+- [x] Add focused and PostgreSQL/Redis/RQ/API/end-to-end regression coverage for the
+  implementation contracts above, including initial-only force, dispatched-job
+  loss/non-runnable recovery, pre-claim failure, and environment fail-closed
+  behavior, plus two parametrized legacy `enqueue_failed` delivery cases and one
+  paused-worker fence case, without adding a real or paid provider.
+
+### Phase 4 final acceptance — verified locally
+
+- [x] Run locked installation from `uv.lock`, final Ruff lint/format checks, mypy,
+  and the complete pytest suite against isolated PostgreSQL and Redis; record exact
+  commands, counts, durations, and warnings in `PROGRESS.md`.
+- [x] Upgrade a blank database through `20260822_0007`, verify the legacy
+  300-second experiment timeout, `running`/`retrying` requeue, and pending
+  generation-1 dispatch backfill only for queued/legacy `enqueue_failed` work; run
+  `alembic check`, downgrade `0007` to `0006`, re-upgrade to head, and confirm no
+  drift.
+- [x] Verify the transactional outbox under immediate Redis failure, partial
+  multi-job publication, compatible/concurrent replay, matching RQ duplicates,
+  mismatched collisions, timeout/status identity, initial-only force behavior,
+  missing/non-runnable dispatched delivery, and concurrent reconcilers.
+- [x] Verify bounded transient recovery and exact exhaustion, permanent failure,
+  real RQ timeout enforcement, post-tool rollback, exact N/N+1 step behavior, and
+  duplicate/stale delivery without a second business effect.
+- [x] Verify fresh leases are not reclaimed, expired leases recover once, and an
+  actual RQ work-horse termination reaches the generation/job-checked fast path or
+  the documented lease fallback without duplicating state. Verify pre-claim
+  interruption consumes exactly one attempt and persisted fault plans fail closed
+  outside development/test. Verify a recovered paused worker is fenced before
+  provider/tool work and legacy `enqueue_failed` missing/terminal delivery recovers.
+- [x] Exercise and record the worker startup/maintenance recovery cycle and the
+  bounded `evalguard reconcile` CLI entrypoint.
+- [x] Rebuild/start the Compose topology with revision `0007`, exercise a queued
+  deterministic-fake submission/retrieval through Phase 4 evidence, and repeat
+  dependency readiness behavior where required.
+- [x] Complete the Phase 4 durable-document, provenance, dependency/reference,
+  secret, and proprietary-material audit. Record that the local commit is pending,
+  Phase 4 remains unpushed, and no remote CI is claimed.
+
 ## Backlog — do not implement during the current milestone
-
-### Phase 4: resilience
-
-- [ ] Add bounded retries, timeouts, duplicate-delivery handling, worker recovery,
-  maximum-step enforcement, and fault injection.
 
 ### Phase 5: analysis and report
 
@@ -317,8 +438,12 @@ queued deterministic breadth without mutating that historical definition.
 | --- | --- |
 | Docker or service tooling is unavailable locally | Detect early, record exact failure, and do not infer runtime success from static configuration. |
 | Windows/PowerShell commands diverge from CI | Exercise documented local commands on Windows and keep CI commands equivalent in behavior. |
-| API persistence succeeds but queue dispatch fails | Model lifecycle states explicitly, hold same-key serialization through dispatch outcome, and surface `enqueue_failed`; partial multi-job enqueue crash windows and outbox-style recovery remain Phase 4 work. |
-| A worker repeats a state-changing call | Carry stable job/tool identities, require exact replay intent, lock decision rows, and enforce database uniqueness plus semantic convergence. |
+| API persistence succeeds but queue dispatch fails | Commit one generation-1 PostgreSQL outbox row with each execution, return `202`, and let API replay or worker/CLI reconciliation publish pending current generations one row at a time. |
+| A worker repeats a state-changing call | Validate the dispatch generation/job identity, serialize attempt claims on the execution row, carry stable tool identities, require exact replay intent, and enforce database uniqueness plus semantic convergence. |
+| Redis remains unavailable during dispatch | Leave the outbox pending with a safe error and capped publication backoff; stop the current sweep after a transport failure instead of terminalizing accepted work or hammering Redis. |
+| Redis loses a job after dispatch is marked | After 30 seconds, audit current dispatched work that is still queued/retrying or legacy `enqueue_failed`; retain exact runnable jobs and convert missing/exact-unrunnable delivery into one fenced interrupted attempt before advancing or exhausting. |
+| A worker exits while an attempt is running | Persist a PostgreSQL-time lease, use RQ's exact job/generation work-horse callback as a fast path, and reclaim only expired locked attempts during periodic recovery. |
+| API replay arrives while a retry is delayed | Target the same durable executions, but limit the initial-work override to queued/legacy rows; `retrying` remains current-generation and `available_at` aware. |
 | Parallel executions leak business state | Scope ownership through execution foreign keys, including composite ticket ownership, and test cross-execution access denial. |
 | Publication races with a late case write | Serialize both paths on suite-row locks and test the concurrent insert boundary. |
 | Destructive test cleanup targets development state | Require test mode, a `*_test` PostgreSQL database, a non-development Redis database, and the test-only queue before cleanup; Redis DB 15 is the tested default. |
@@ -326,15 +451,17 @@ queued deterministic breadth without mutating that historical definition.
 | Documentation drifts from behavior | Update durable documents with the implementing change and gate completion on exercised commands. |
 | A real-provider run introduces cost or secrets | Keep real providers in Phase 6 and require explicit user approval. |
 
-No Phase 0/1/2 implementation or Phase 3 local-acceptance blocker is known. One
+No Phase 0–4 local-acceptance blocker is known. One
 upstream FastAPI/Starlette `TestClient` deprecation warning is recorded in
-`PROGRESS.md`; the full Phase 3 suite passes 158 tests. Phase 2 is pushed at
-`26c3e86`. Phase 3 is locally committed at `083808c` but is not pushed, and no
-Phase 3 remote-CI result is claimed. Partial multi-job enqueue crash-window/outbox
-recovery remains Phase 4.
+`PROGRESS.md`; the final Phase 4 suite passes all 189 tests. Phase 2 is pushed at
+`26c3e86` at the Phase 2 close. Phase 3 commits `083808c` and `6655e79` are pushed,
+and local `main` plus `origin/main` are at `6655e79`; no Phase 3 remote-CI result is
+claimed. Phase 4 implementation and final-acceptance criteria are checked above
+from the exact local evidence in `PROGRESS.md`; its local commit remains pending,
+it is unpushed, and no Phase 4 remote-CI result is claimed.
 
 ## Precise next action
 
-Keep Phase 3 unpushed until the user explicitly asks to publish the Phase 3
-commits, and record remote CI only if it is actually observed. Do not begin Phase 4
-until the user explicitly advances that milestone.
+Record the pending local Phase 4 commit when it occurs, then keep Phase 4 unpushed
+until the user explicitly asks to publish. Record remote CI only if actually
+observed, and do not begin Phase 5 until the user explicitly advances it.

@@ -1,4 +1,4 @@
-"""Suite, experiment, and execution endpoints through Phase 3."""
+"""Suite, experiment, and execution endpoints through Phase 4."""
 
 import hashlib
 import logging
@@ -14,8 +14,10 @@ from sqlalchemy.orm import Session
 
 from evalguard.api.schemas import (
     CustomerRead,
+    ExecutionAttemptRead,
     ExecutionBrief,
     ExecutionDetail,
+    ExecutionDispatchRead,
     ExperimentAccepted,
     ExperimentCreate,
     ExperimentDetail,
@@ -28,11 +30,15 @@ from evalguard.api.schemas import (
     ToolInvocationRead,
     TraceEventRead,
 )
+from evalguard.core.config import get_settings
 from evalguard.db.models import (
     CaseExecution,
     Customer,
     EvaluationCase,
     EvaluationSuite,
+    ExecutionAttempt,
+    ExecutionDispatch,
+    ExecutionFaultPlan,
     Experiment,
     GraderResult,
     Order,
@@ -42,7 +48,7 @@ from evalguard.db.models import (
     TraceEvent,
 )
 from evalguard.db.session import get_db
-from evalguard.workers.queue import enqueue_execution
+from evalguard.workers.dispatch import create_dispatch, reconcile_pending_dispatches
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1")
@@ -60,7 +66,7 @@ def _idempotency_submission_session(
     session: Session,
     idempotency_key: str,
 ) -> Iterator[Session]:
-    """Use one connection for key serialization, persistence, and dispatch status."""
+    """Use one connection for key serialization and durable acceptance."""
 
     lock_id = _idempotency_advisory_lock_id(idempotency_key)
     bind = session.get_bind()
@@ -143,49 +149,65 @@ def _execution_rows(session: Session, experiment_id: UUID) -> list[CaseExecution
     )
 
 
-def _dispatch_executions(
+def _fault_intent(
+    session: Session,
+    experiment_id: UUID,
+) -> tuple[str, str, int] | None:
+    row = session.execute(
+        select(EvaluationCase.key, ExecutionFaultPlan.mode, ExecutionFaultPlan.fail_attempts)
+        .join(CaseExecution, CaseExecution.case_id == EvaluationCase.id)
+        .join(
+            ExecutionFaultPlan,
+            ExecutionFaultPlan.case_execution_id == CaseExecution.id,
+        )
+        .where(CaseExecution.experiment_id == experiment_id)
+    ).one_or_none()
+    if row is None:
+        return None
+    return str(row.key), str(row.mode), int(row.fail_attempts)
+
+
+def _request_matches_experiment(
     session: Session,
     experiment: Experiment,
-    executions: list[CaseExecution],
-) -> None:
+    suite_id: UUID,
+    payload: ExperimentCreate,
+) -> bool:
+    requested_fault = payload.fault_injection
+    fault_intent = _fault_intent(session, experiment.id)
+    expected_fault = (
+        None
+        if requested_fault is None
+        else (
+            requested_fault.case_key,
+            requested_fault.mode.value,
+            requested_fault.fail_attempts,
+        )
+    )
+    return (
+        experiment.suite_id == suite_id
+        and experiment.provider == payload.provider
+        and experiment.max_attempts == payload.max_attempts
+        and experiment.job_timeout_seconds == payload.job_timeout_seconds
+        and experiment.max_tool_steps == payload.max_tool_steps
+        and experiment.retry_backoff_seconds == payload.retry_backoff_seconds
+        and fault_intent == expected_fault
+    )
+
+
+def _best_effort_dispatch(execution_ids: list[UUID]) -> None:
+    """Reduce queue latency while leaving PostgreSQL as the durable acceptance point."""
+
     try:
-        for execution in executions:
-            enqueue_execution(execution.id)
-    except Exception as exc:
+        reconcile_pending_dispatches(
+            execution_ids=execution_ids,
+            force_initial=True,
+        )
+    except Exception:
         logger.exception(
-            "Failed to enqueue experiment",
-            extra={"event": "experiment_enqueue_failed", "experiment_id": experiment.id},
+            "Immediate dispatch deferred to worker reconciliation",
+            extra={"event": "experiment_dispatch_deferred"},
         )
-        session.rollback()
-        persisted_executions = list(
-            session.scalars(
-                select(CaseExecution)
-                .where(CaseExecution.experiment_id == experiment.id)
-                .order_by(CaseExecution.created_at, CaseExecution.id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            ).all()
-        )
-        persisted_experiment = session.scalar(
-            select(Experiment)
-            .where(Experiment.id == experiment.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-        if persisted_experiment is not None:
-            accepted_by_worker = persisted_experiment.status in {"running", "completed"} or any(
-                row.status in {"running", "completed"} for row in persisted_executions
-            )
-            if accepted_by_worker:
-                session.commit()
-                return
-            persisted_experiment.status = "enqueue_failed"
-            for persisted_execution in persisted_executions:
-                if persisted_execution.status == "queued":
-                    persisted_execution.status = "enqueue_failed"
-                    persisted_execution.error_message = type(exc).__name__
-            session.commit()
-        raise HTTPException(status_code=503, detail="Unable to enqueue experiment") from exc
 
 
 @router.get("/suites", response_model=list[SuiteSummary])
@@ -229,43 +251,51 @@ def _create_experiment(
     if suite is None:
         raise HTTPException(status_code=404, detail="Evaluation suite version not found")
 
+    cases = list(
+        session.scalars(
+            select(EvaluationCase)
+            .where(EvaluationCase.suite_id == suite.id)
+            .order_by(EvaluationCase.key)
+        ).all()
+    )
+    if not cases:
+        raise HTTPException(status_code=409, detail="Evaluation suite has no cases")
+    case_keys = {case.key for case in cases}
+    requested_fault = payload.fault_injection
+    if requested_fault is not None:
+        if requested_fault.case_key not in case_keys:
+            raise HTTPException(
+                status_code=422,
+                detail="Fault injection case_key is not part of the selected suite",
+            )
+        if get_settings().environment.lower() not in {"development", "test"}:
+            raise HTTPException(
+                status_code=403,
+                detail="Deterministic fault injection is disabled in this environment",
+            )
+
     if idempotency_key is not None:
         existing = session.scalar(
             select(Experiment).where(Experiment.idempotency_key == idempotency_key)
         )
         if existing is not None:
-            if existing.suite_id != suite.id or existing.provider != payload.provider:
+            if not _request_matches_experiment(session, existing, suite.id, payload):
                 raise HTTPException(
                     status_code=409,
                     detail="Idempotency-Key was already used for a different experiment",
                 )
-            if existing.status == "enqueue_failed":
-                executions = _execution_rows(session, existing.id)
-                existing.status = "queued"
-                existing.completed_at = None
-                for execution in executions:
-                    execution.status = "queued"
-                    execution.error_message = None
-                    execution.completed_at = None
-                session.commit()
-                _dispatch_executions(session, existing, executions)
-                session.refresh(existing)
             response.headers["Location"] = f"/api/v1/experiments/{existing.id}"
             return _accepted(session, existing)
-
-    cases = session.scalars(
-        select(EvaluationCase)
-        .where(EvaluationCase.suite_id == suite.id)
-        .order_by(EvaluationCase.key)
-    ).all()
-    if not cases:
-        raise HTTPException(status_code=409, detail="Evaluation suite has no cases")
 
     experiment = Experiment(
         suite_id=suite.id,
         provider=payload.provider,
         status="queued",
         idempotency_key=idempotency_key,
+        max_attempts=payload.max_attempts,
+        job_timeout_seconds=payload.job_timeout_seconds,
+        max_tool_steps=payload.max_tool_steps,
+        retry_backoff_seconds=payload.retry_backoff_seconds,
     )
     session.add(experiment)
     session.flush()
@@ -279,9 +309,18 @@ def _create_experiment(
         for case in cases
     ]
     session.add_all(executions)
+    session.flush()
+    for execution, case in zip(executions, cases, strict=True):
+        create_dispatch(session, execution.id, generation=1)
+        if requested_fault is not None and case.key == requested_fault.case_key:
+            session.add(
+                ExecutionFaultPlan(
+                    case_execution_id=execution.id,
+                    mode=requested_fault.mode.value,
+                    fail_attempts=requested_fault.fail_attempts,
+                )
+            )
     session.commit()
-
-    _dispatch_executions(session, experiment, executions)
     session.refresh(experiment)
 
     response.headers["Location"] = f"/api/v1/experiments/{experiment.id}"
@@ -303,10 +342,13 @@ def create_experiment(
     ] = None,
 ) -> ExperimentAccepted:
     if idempotency_key is None:
-        return _create_experiment(payload, response, session, idempotency_key)
+        accepted = _create_experiment(payload, response, session, idempotency_key)
+    else:
+        with _idempotency_submission_session(session, idempotency_key) as locked_session:
+            accepted = _create_experiment(payload, response, locked_session, idempotency_key)
 
-    with _idempotency_submission_session(session, idempotency_key) as locked_session:
-        return _create_experiment(payload, response, locked_session, idempotency_key)
+    _best_effort_dispatch(accepted.execution_ids)
+    return accepted
 
 
 @router.get("/experiments/{experiment_id}", response_model=ExperimentDetail)
@@ -332,6 +374,10 @@ def get_experiment(experiment_id: UUID, session: SessionDependency) -> Experimen
         provider=experiment.provider,
         status=experiment.status,
         idempotency_key=experiment.idempotency_key,
+        max_attempts=experiment.max_attempts,
+        job_timeout_seconds=experiment.job_timeout_seconds,
+        max_tool_steps=experiment.max_tool_steps,
+        retry_backoff_seconds=experiment.retry_backoff_seconds,
         created_at=experiment.created_at,
         completed_at=experiment.completed_at,
         executions=[
@@ -341,6 +387,7 @@ def get_experiment(experiment_id: UUID, session: SessionDependency) -> Experimen
                 case_key=case.key,
                 trial_number=execution.trial_number,
                 status=execution.status,
+                attempt_count=execution.attempt_count,
             )
             for execution, case in rows
         ],
@@ -369,6 +416,16 @@ def _execution_records(session: Session, case_execution_id: UUID) -> dict[str, A
             .where(SupportTicket.case_execution_id == case_execution_id)
             .order_by(SupportTicket.created_at, SupportTicket.id)
         ).all(),
+        "attempts": session.scalars(
+            select(ExecutionAttempt)
+            .where(ExecutionAttempt.case_execution_id == case_execution_id)
+            .order_by(ExecutionAttempt.attempt_number)
+        ).all(),
+        "dispatches": session.scalars(
+            select(ExecutionDispatch)
+            .where(ExecutionDispatch.case_execution_id == case_execution_id)
+            .order_by(ExecutionDispatch.generation)
+        ).all(),
         "trace_events": session.scalars(
             select(TraceEvent)
             .where(TraceEvent.case_execution_id == case_execution_id)
@@ -395,6 +452,9 @@ def get_execution(execution_id: UUID, session: SessionDependency) -> ExecutionDe
     case = session.get(EvaluationCase, execution.case_id)
     if case is None:
         raise HTTPException(status_code=500, detail="Evaluation case is missing")
+    experiment = session.get(Experiment, execution.experiment_id)
+    if experiment is None:
+        raise HTTPException(status_code=500, detail="Execution experiment is missing")
     records = _execution_records(session, execution.id)
 
     return ExecutionDetail(
@@ -404,6 +464,15 @@ def get_execution(execution_id: UUID, session: SessionDependency) -> ExecutionDe
         case_key=case.key,
         trial_number=execution.trial_number,
         status=execution.status,
+        attempt_count=execution.attempt_count,
+        max_attempts=experiment.max_attempts,
+        job_timeout_seconds=experiment.job_timeout_seconds,
+        max_tool_steps=experiment.max_tool_steps,
+        retry_backoff_seconds=experiment.retry_backoff_seconds,
+        dispatch_generation=execution.dispatch_generation,
+        lease_expires_at=execution.lease_expires_at,
+        last_failure_kind=execution.last_failure_kind,
+        last_failure_retryable=execution.last_failure_retryable,
         final_resolution=execution.final_resolution,
         error_message=execution.error_message,
         created_at=execution.created_at,
@@ -451,6 +520,35 @@ def get_execution(execution_id: UUID, session: SessionDependency) -> ExecutionDe
                 escalated_at=row.escalated_at,
             )
             for row in records["support_tickets"]
+        ],
+        attempts=[
+            ExecutionAttemptRead(
+                attempt_number=row.attempt_number,
+                dispatch_generation=row.dispatch_generation,
+                job_id=row.job_id,
+                status=row.status,
+                retryable=row.retryable,
+                failure_kind=row.failure_kind,
+                error_message=row.error_message,
+                step_count=row.step_count,
+                started_at=row.started_at,
+                lease_expires_at=row.lease_expires_at,
+                completed_at=row.completed_at,
+            )
+            for row in records["attempts"]
+        ],
+        dispatches=[
+            ExecutionDispatchRead(
+                generation=row.generation,
+                job_id=row.job_id,
+                status=row.status,
+                attempt_count=row.attempt_count,
+                available_at=row.available_at,
+                last_attempt_at=row.last_attempt_at,
+                dispatched_at=row.dispatched_at,
+                last_error_kind=row.last_error_kind,
+            )
+            for row in records["dispatches"]
         ],
         trace_events=[
             TraceEventRead(

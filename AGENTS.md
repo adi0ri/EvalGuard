@@ -24,9 +24,22 @@ ParcelDesk support domain.
   `20260822_0006` enforces that each ticket customer owns its order. Locked
   installation, static checks, clean migration round trip, Compose startup, the
   live 25-case smoke, and the Redis-unavailable readiness probe all passed. Phase 3
-  is locally committed at `083808c`; it is not pushed, and no Phase 3 remote-CI
-  result is claimed.
-- Do not begin Phase 4 or later work unless the user explicitly advances the
+  commits `083808c` and `6655e79` are pushed; local `main` and `origin/main` are at
+  `6655e79`. No Phase 3 remote-CI result is claimed.
+- Phase 4 implementation and local acceptance are complete. Revision
+  `20260822_0007` adds durable dispatch, execution
+  attempt, lease, retry-policy, and development/test fault-plan state. The API now
+  commits each execution and its PostgreSQL dispatch intent together, returns
+  `202 Accepted` independently of immediate Redis availability, and leaves pending
+  work for worker or CLI reconciliation. The revision preserves the pre-Phase-4
+  300-second timeout for existing experiments, requeues legacy `running` and
+  `retrying` executions, and backfills pending generation-1 dispatches for queued
+  or legacy `enqueue_failed` work. The final 189-test run, migration round trip,
+  Compose startup, deterministic live flows, real RQ timeout, actual worker
+  interruption, and Redis-outage recovery are recorded in `PROGRESS.md`. Phase 4
+  has no commit or push yet; keep it unpushed until the user explicitly requests
+  publication, and claim no remote CI without observing it.
+- Do not begin Phase 5 or later work unless the user explicitly advances the
   milestone. Record later ideas in `PLAN.md` instead.
 
 ## Engineering rules
@@ -59,8 +72,10 @@ ParcelDesk support domain.
   processes.
 - PostgreSQL is the source of truth for evaluation records and ParcelDesk business
   state. Do not use SQLite as a substitute for PostgreSQL integration coverage.
-- Redis and RQ provide background dispatch. Experiment submission persists work
-  before enqueueing it and returns `202 Accepted`; it does not wait for evaluation.
+- Redis and RQ provide background dispatch. Experiment submission transactionally
+  persists each execution with a PostgreSQL outbox row before making a best-effort
+  enqueue attempt and returns `202 Accepted`; it does not wait for Redis or for
+  evaluation. Pending outbox rows remain the durable recovery source.
 - Each case execution receives isolated synthetic business state relevant to its
   case. Customer, order, refund, and support-ticket ownership is relational and
   execution scoped.
@@ -69,6 +84,40 @@ ParcelDesk support domain.
 - State-changing tools run transactionally and must be safe against repeated job
   or tool delivery. Enforce important uniqueness rules in PostgreSQL as well as in
   application logic. Acquire the execution lock before the order lock consistently.
+- Treat RQ delivery as repeatable. One current dispatch generation may claim at
+  most one execution attempt; stale generations, concurrent duplicate delivery,
+  and already-terminal delivery must not repeat provider or tool effects. Accept an
+  existing RQ job as an idempotent enqueue only after its queue, function,
+  positional arguments, empty keyword arguments, configured timeout, and runnable
+  status match exactly. Preserve the legacy one-argument generation-1 identity only
+  when the persisted experiment timeout is its legacy 300 seconds. Validate the
+  live RQ delivery against the persisted dispatch and timeout before claim; an
+  identity mismatch consumes no execution attempt and must be reconciled as a
+  pending safe collision. Before provider or tool work, reacquire the execution
+  lock and revalidate the claimed attempt number, dispatch generation, and
+  `running` status so a paused worker cannot resume after recovery fences it.
+- Execution retries are bounded by persisted `max_attempts`; only explicitly
+  retryable failures schedule a new dispatch generation. Persist each attempt and
+  its safe failure kind. Use the configured RQ job timeout and a PostgreSQL lease
+  so an unexpected work-horse exit or expired running attempt can be recovered
+  without racing the execution transaction. Dispatch publication retries are a
+  separate, open-ended concern with capped backoff: never discard accepted work
+  merely because Redis is temporarily unavailable.
+- Audit current dispatched-but-unclaimed rows after the delivery recheck interval
+  while their execution is queued, retrying, or legacy `enqueue_failed`. Keep exact
+  runnable RQ jobs unchanged; treat a missing or exact-but-unrunnable job as a pre-
+  claim interruption that consumes one bounded attempt and advances the generation
+  or exhausts it. Never resurrect a stale generation.
+- A tool step is one request to any public `ToolRuntime` tool method. Count the
+  request before lock, replay, or invocation lookup, including successful calls,
+  policy/ownership errors, semantic no-ops, cached-success replays, and persisted-
+  error replays. Typed argument validation that fails before a tool method is
+  entered is not a step. Reject the first request beyond `max_tool_steps` before it
+  can invoke or mutate anything.
+- Phase 4 fault plans are typed, deterministic, synthetic controls for development
+  and test only. They are execution-level operational data, not immutable suite or
+  case definitions. Reject their API creation and fail closed if a persisted plan
+  is encountered in any other environment.
 - Tools use typed arguments. Record ordered calls, results, failures, and the final
   structured resolution as trace evidence. A successful exact cached replay emits
   one `tool_replay` event after the original outcome without a second invocation or
@@ -91,8 +140,9 @@ ParcelDesk support domain.
 
 ## Required verification
 
-Before claiming Phase 0/1/2/3 complete, run and record the exact commands and results
-for all of the following:
+Phase 4 completed the following local gate. Preserve its exact evidence in
+`PROGRESS.md`, and rerun the applicable items before any later completion claim
+whose changes could affect them:
 
 1. Dependency installation from the committed lockfile.
 2. Ruff linting and formatting checks.
@@ -123,6 +173,25 @@ for all of the following:
     Phase 3 ownership migration `20260822_0006`, followed by a schema-drift check.
 17. Successful stable-call replay evidence through `tool_replay`, same-execution
     ticket/order/customer ownership rejection, and the current grader criteria.
+18. Clean upgrade through Phase 4 revision `20260822_0007`, downgrade to
+    `20260822_0006`, re-upgrade to head, preservation of the legacy 300-second
+    experiment timeout, requeue of legacy `running`/`retrying` executions, pending
+    generation-1 backfill only for queued/legacy `enqueue_failed` work, and a
+    schema-drift check.
+19. PostgreSQL/Redis coverage for transactional outbox creation, partial dispatch
+    recovery, exact duplicate-job identity, mismatched collision deferral, and
+    compatible/concurrent idempotent replay, including initial-only force behavior
+    that preserves delayed retry `available_at`.
+20. Bounded transient retry, permanent failure, RQ timeout, exact maximum-tool-step
+    enforcement, duplicate/stale delivery, and rollback of failed attempt state.
+21. Fresh-lease protection, expired-lease and work-horse interruption recovery,
+    pre-claim failure recovery, missing/unrunnable dispatched-job audit, bounded
+    recovery passes, and development/test-only typed fault injection that fails
+    closed elsewhere, including legacy `enqueue_failed` delivery and a paused
+    worker fenced before provider/tool work.
+22. Phase 4 retrieval evidence for policies, attempts, generations, dispatches,
+    leases, safe failure kinds, and retry/recovery traces, plus the documented
+    worker and CLI recovery entrypoints.
 
 Do not claim the milestone is complete while any acceptance item in `PLAN.md` is
 unchecked or unverified.

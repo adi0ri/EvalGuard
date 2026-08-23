@@ -7,10 +7,13 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from evalguard.core.config import get_settings
 from evalguard.db.models import (
     CaseExecution,
     Customer,
     EvaluationCase,
+    ExecutionAttempt,
+    ExecutionFaultPlan,
     Experiment,
     GraderResult,
     Order,
@@ -55,6 +58,37 @@ class UnsupportedProviderError(RuntimeError):
 
 class UnsupportedCaseDefinitionError(RuntimeError):
     pass
+
+
+class FaultInjectionDisabledError(RuntimeError):
+    pass
+
+
+class StaleExecutionClaimError(RuntimeError):
+    """A previously claimed attempt no longer owns the execution generation."""
+
+
+def _validate_claim_fence(
+    execution: CaseExecution,
+    *,
+    expected_attempt_number: int | None,
+    expected_dispatch_generation: int | None,
+) -> None:
+    if expected_attempt_number is None and expected_dispatch_generation is None:
+        return
+    if expected_attempt_number is None or expected_dispatch_generation is None:
+        raise ValueError("Attempt number and dispatch generation must be supplied together")
+    if expected_attempt_number < 1 or expected_dispatch_generation < 1:
+        raise ValueError("Claim fence values must be positive")
+    if (
+        execution.status != "running"
+        or execution.attempt_count != expected_attempt_number
+        or execution.dispatch_generation != expected_dispatch_generation
+    ):
+        raise StaleExecutionClaimError(
+            f"Execution {execution.id} no longer owns attempt {expected_attempt_number} "
+            f"in generation {expected_dispatch_generation}"
+        )
 
 
 def _materialize_legacy_fixture(
@@ -383,6 +417,8 @@ def execute_case(
     case_execution_id: UUID,
     *,
     provider: DeterministicFakeProvider | None = None,
+    expected_attempt_number: int | None = None,
+    expected_dispatch_generation: int | None = None,
 ) -> dict[str, Any]:
     """Run, persist, and grade one case in a single database transaction.
 
@@ -396,6 +432,11 @@ def execute_case(
     )
     if execution is None:
         raise ExecutionNotFoundError(str(case_execution_id))
+    _validate_claim_fence(
+        execution,
+        expected_attempt_number=expected_attempt_number,
+        expected_dispatch_generation=expected_dispatch_generation,
+    )
 
     experiment = session.get(Experiment, execution.experiment_id)
     case = session.get(EvaluationCase, execution.case_id)
@@ -409,11 +450,24 @@ def execute_case(
         raise UnsupportedProviderError(experiment.provider)
     if execution.status == "completed":
         return {"execution_id": str(execution.id), "status": "completed", "replayed": True}
+    if execution.status == "failed":
+        return {"execution_id": str(execution.id), "status": "failed", "replayed": True}
 
     execution.status = "running"
     if execution.started_at is None:
         execution.started_at = datetime.now(UTC)
-    selected_provider = provider or DeterministicFakeProvider()
+    fault_plan = session.get(ExecutionFaultPlan, execution.id)
+    if fault_plan is not None and get_settings().environment.lower() not in {"development", "test"}:
+        raise FaultInjectionDisabledError(
+            "Persisted deterministic fault injection is disabled in this environment"
+        )
+    attempt_number = max(1, execution.attempt_count)
+    selected_provider = provider or DeterministicFakeProvider(
+        fault_mode=fault_plan.mode if fault_plan is not None else None,
+        attempt_number=attempt_number,
+        fail_attempts=fault_plan.fail_attempts if fault_plan is not None else 0,
+        timeout_seconds=experiment.job_timeout_seconds,
+    )
 
     if "category" in case.expected:
         definition = _scenario_definition(case)
@@ -423,6 +477,7 @@ def execute_case(
             session,
             execution.id,
             actor_customer_external_id=fixture.requester_customer_id,
+            max_tool_steps=experiment.max_tool_steps,
         )
         resolution = selected_provider.run_scenario(definition=definition, tools=runtime)
         execution.final_resolution = resolution
@@ -438,7 +493,11 @@ def execute_case(
     else:
         _materialize_legacy_fixture(session, execution, case)
         legacy_expectation = EligibleRefundExpectation.model_validate(case.expected)
-        runtime = ToolRuntime(session, execution.id)
+        runtime = ToolRuntime(
+            session,
+            execution.id,
+            max_tool_steps=experiment.max_tool_steps,
+        )
         resolution = selected_provider.run(
             prompt=case.prompt,
             expected_order_id=legacy_expectation.order_id,
@@ -454,7 +513,22 @@ def execute_case(
     _persist_grader_results(session, execution, runtime, outcomes)
 
     completed_at = datetime.now(UTC)
+    if execution.attempt_count > 0:
+        attempt = session.scalar(
+            select(ExecutionAttempt).where(
+                ExecutionAttempt.case_execution_id == execution.id,
+                ExecutionAttempt.attempt_number == execution.attempt_count,
+            )
+        )
+        if attempt is not None and attempt.status == "running":
+            attempt.status = "succeeded"
+            attempt.step_count = runtime.steps_attempted
+            attempt.completed_at = completed_at
     execution.status = "completed"
+    execution.error_message = None
+    execution.lease_expires_at = None
+    execution.last_failure_kind = None
+    execution.last_failure_retryable = None
     execution.completed_at = completed_at
     reconcile_experiment_status(
         session,
