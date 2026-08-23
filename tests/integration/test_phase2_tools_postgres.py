@@ -101,8 +101,19 @@ def test_address_update_succeeds_and_duplicate_intent_is_a_noop(
                 .select_from(TraceEvent)
                 .where(TraceEvent.case_execution_id == execution_id)
             )
-            == 4
+            == 5
         )
+        assert session.scalars(
+            select(TraceEvent.event_type)
+            .where(TraceEvent.case_execution_id == execution_id)
+            .order_by(TraceEvent.sequence_number)
+        ).all() == [
+            "tool_call",
+            "tool_result",
+            "tool_replay",
+            "tool_call",
+            "tool_result",
+        ]
 
 
 def test_concurrent_exact_address_call_replays_one_persisted_invocation(
@@ -144,8 +155,13 @@ def test_concurrent_exact_address_call_replays_one_persisted_invocation(
                 .select_from(TraceEvent)
                 .where(TraceEvent.case_execution_id == execution_id)
             )
-            == 2
+            == 3
         )
+        assert session.scalars(
+            select(TraceEvent.event_type)
+            .where(TraceEvent.case_execution_id == execution_id)
+            .order_by(TraceEvent.sequence_number)
+        ).all() == ["tool_call", "tool_result", "tool_replay"]
 
 
 def test_concurrent_semantic_address_updates_converge_without_extra_mutation(
@@ -513,6 +529,53 @@ def test_support_ticket_foreign_keys_reject_cross_execution_ownership(
                 priority="normal",
                 status="escalated",
                 tool_call_id="other-execution-lookup-1",
+            )
+        )
+        session.flush()
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(SupportTicket)) == 0
+
+
+def test_support_ticket_foreign_key_rejects_the_wrong_customer_for_its_order(
+    session_factory: sessionmaker[Session],
+    execution_factory: Callable[..., UUID],
+) -> None:
+    execution_id = execution_factory(
+        order_external_id="PD-OWNER",
+        customer_external_id="CUST-OWNER",
+    )
+
+    with pytest.raises(IntegrityError), session_factory.begin() as session:
+        other_customer = Customer(
+            case_execution_id=execution_id,
+            external_id="CUST-NOT-OWNER",
+            name="Synthetic Non-Owner",
+            email="non-owner@example.test",
+        )
+        session.add(other_customer)
+        session.flush()
+        ToolRuntime(session, execution_id).lookup_order(
+            LookupOrderArgs(order_id="PD-OWNER"),
+            tool_call_id="same-execution-ticket-owner-check",
+        )
+        order = session.scalar(
+            select(Order).where(
+                Order.case_execution_id == execution_id,
+                Order.external_id == "PD-OWNER",
+            )
+        )
+        assert order is not None
+        session.add(
+            SupportTicket(
+                case_execution_id=execution_id,
+                customer_id=other_customer.id,
+                order_id=order.id,
+                reason_code="manual_review",
+                reason="This same-execution owner mismatch must fail.",
+                priority="normal",
+                status="escalated",
+                tool_call_id="same-execution-ticket-owner-check",
             )
         )
         session.flush()

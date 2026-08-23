@@ -2,7 +2,8 @@
 
 This is a chronological evidence log. A command is recorded as passing only when
 it was actually run. Phase 0/1 entries below are from 2026-08-18 on
-Windows/PowerShell; the Phase 2 continuation is explicitly dated 2026-08-22.
+Windows/PowerShell; the Phase 2 and Phase 3 continuations are explicitly dated
+2026-08-22.
 
 ## Repository foundation
 
@@ -393,9 +394,140 @@ Phase 2 is locally verified. The precise next unchecked work, only after the use
 explicitly advances the milestone, is Phase 3: expand the immutable original suite
 to exactly 25 scenarios, add deterministic state/trace/policy/authorization/
 escalation graders, and add deliberately defective fake-agent behaviors that prove
-those graders detect regressions. No Phase 3 implementation was started here.
+those graders detect regressions. No Phase 3 implementation had started at that
+Phase 2 checkpoint.
 
 Git author identity remained configured, so local commit `e0f9715`
 (`feat: complete EvalGuard Phase 2`) recorded the verified 21-file implementation,
-migration, tests, and durable documentation. The Phase 2 change was not pushed, and
-remote Phase 2 CI was not run.
+migration, tests, and durable documentation. The Phase 2 change had not yet been
+pushed at that checkpoint, and remote Phase 2 CI had not been run.
+
+## Phase 3 implementation and review hardening — 2026-08-22
+
+The user explicitly advanced the repository to Phase 3 and authorized a later
+push. The immutable `parceldesk-refunds@1.0.0` suite and hashes remain unchanged.
+The separately published `parceldesk-refunds@2.0.0` suite contains 25 independently
+authored cases in the required 7 normal / 5 ineligible / 5 boundary / 4
+authorization-privacy / 4 duplicate-recovery distribution. Fixtures carry a fixed
+policy timestamp, an independent policy oracle, typed fake plans, and complete
+definition hashes. The deterministic fake remains the only provider.
+
+The worker now materializes multiple execution-owned customers/orders, supplies the
+requester customer as trusted tool context, executes typed plans through all four
+production tools, persists six deterministic grader families, and reconciles the
+experiment from all child executions under a parent-row lock. Eleven stable fake
+behavior IDs provide one reference behavior and ten deliberate defects.
+
+Final review then tightened boundaries before repository closure:
+
+- every tool uses execution-row then order-row lock order;
+- successful exact cached replay rechecks actor ownership and adds one ordered
+  `tool_replay` event after the original tool outcome without another invocation or
+  mutation;
+- the executor validates case/experiment suite membership before starting work or
+  returning a completed replay, with the cross-suite rejection test exercising
+  both queued and completed execution states;
+- frozen typed contracts bind the resolution and every expected state mutation to
+  the policy order, reject expected mutation for denied outcomes, and validate
+  other cross-field invariants;
+- privacy grading detects protected numeric as well as string values embedded in
+  free text, uses token boundaries so `US` does not match inside `CUSTOMER`, and
+  recognizes grouped numeric forms such as `9,125`;
+- `trace_v1.invocation_outcomes_match` and
+  `escalation_v1.ticket_owner_matches_order` add independent evidence, while
+  `state_v1.tickets_exact` includes the ticket customer; and
+- Alembic revision `20260822_0006` adds an order/customer/execution parent key and
+  matching support-ticket foreign key so a same-execution ticket customer must own
+  the referenced order.
+
+All ten deliberate fake defects now run through targeted PostgreSQL execution and
+fail their intended criterion across the six grader families. No SQLite or real
+provider was substituted.
+
+## Phase 3 final locked and automated verification — 2026-08-22
+
+The final current-tree commands produced these results:
+
+| Command | Exact observed result |
+| --- | --- |
+| `uv sync --frozen --all-groups` | Succeeded; checked 49 locked packages. |
+| `uv run ruff check .` | Succeeded: `All checks passed!` |
+| `uv run ruff format .` | Succeeded; formatted 2 files. |
+| `uv run ruff format --check .` | Succeeded after the formatter had corrected 2 files. |
+| `uv run mypy` | Succeeded: no issues found in 29 source files. |
+| `uv run pytest tests/unit -q` | 84 passed with 1 warning in 0.38 seconds. |
+| `uv run pytest tests/integration/test_phase3_scenarios_postgres.py -q` | 38 passed with 1 warning in 24.87 seconds. |
+| `uv run pytest` | Collected 158 tests; 158 passed with 1 warning in 52.51 seconds. |
+
+The warning remains the dependency-originated `StarletteDeprecationWarning` from
+FastAPI's `TestClient` compatibility layer. It was not suppressed and did not fail
+a test. Earlier intermediate counts were superseded by this final-tree run.
+
+## Phase 3 clean migration and immutable seed verification — 2026-08-22
+
+A separately created blank disposable PostgreSQL database was used for the complete
+six-revision chain. The observed sequence was:
+
+1. upgrade the blank database through `20260822_0006 (head)`;
+2. run `alembic check`, which reported no model/migration drift;
+3. downgrade `20260822_0006` to `20260822_0005`;
+4. re-upgrade `20260822_0005` to `20260822_0006`;
+5. run `alembic check` again with no drift;
+6. run the suite seed twice and observe stable IDs, membership, and hashes; and
+7. drop the disposable database.
+
+The verified suite hashes were:
+
+- v2: `28289cfdcd98be852b00e451b2f52ae8a9af65a454a6642bb96acb4991a19782`;
+- legacy v1: `aaedf653770166eb7e967352b9242509a94dd9ba3e4ee833576617c403ec6abd`.
+
+## Phase 3 Compose and final live smoke — 2026-08-22
+
+| Command | Exact observed result |
+| --- | --- |
+| `docker compose config --quiet` | Exited 0 with no configuration error. |
+| `docker compose up --build -d --wait` | Exited 0; API, PostgreSQL, and Redis were healthy, the worker was running, and one-shot `migrate` and `test-db` exited 0. |
+| Container `alembic current` | Reported `20260822_0006 (head)`. |
+| Container `alembic check` | Reported no model/migration drift. |
+| Container seed, run twice | Returned stable v1/v2 identities, hashes, and 25-case v2 membership. |
+
+The final rebuilt API used idempotency key
+`phase3-final-b2adf6d0-6cfd-485f-8b35-f14cf4d41da7`. Initial submission and replay
+both returned `202` with the same experiment and execution IDs. Experiment
+`f661c252-631f-4a22-9ded-4118d7048feb` completed all 25 of 25 executions through
+the deterministic fake. Retrieval showed:
+
+- 507 of 507 passing grader results across six families;
+- 44 tool invocations;
+- 164 trace events, including exactly one `tool_replay`;
+- 7 refunds and 5 support tickets;
+- a sampled 4,599-cent refund;
+- a sampled final address of `82 Harbor Fern Road`;
+- a sampled `manual_review` ticket; and
+- a sampled authorization tool invocation with failed status and no foreign state
+  disclosure or mutation.
+
+This is **synthetic infrastructure validation**, not real-model quality,
+performance, latency, token, or cost evidence. No real or paid provider was called.
+
+## Phase 3 dependency-failure and log check — 2026-08-22
+
+During a deliberate Redis outage, liveness remained `200` and readiness returned
+`503` with Redis unavailable. After Redis and the worker were restored, readiness
+returned `200`. Four worker Redis connection `ERROR` lines were expected during the
+outage; a post-restoration scan found zero suspicious lines.
+
+## Phase 3 known limit, Git status, and precise next action — 2026-08-22
+
+Creating all case executions is transactional, but sending 25 jobs to Redis is not
+one atomic operation. A process crash after only some enqueue calls succeed can
+leave partial dispatch requiring reconciliation. Outbox-style recovery for that
+crash window remains Phase 4 work; it is not claimed by Phase 3 idempotency or
+aggregate lifecycle handling.
+
+The Phase 2 commits were pushed successfully; local `main` and its `origin/main`
+tracking ref are at `26c3e86`. Phase 3 remains uncommitted and unpushed, so no
+Phase 3 remote-CI result is claimed. The precise next action is the final durable
+documentation/provenance/secret audit, followed by a local Phase 3 commit if Git
+identity remains configured and a push under the user's existing authorization.
+Do not begin Phase 4 until the user explicitly advances it.

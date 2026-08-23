@@ -1,4 +1,4 @@
-"""Public request and response contracts for the Phase 2 API."""
+"""Public request and response contracts for the EvalGuard API."""
 
 from datetime import datetime
 from typing import Any, Literal
@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from evalguard.evaluation.suite import SUITE_NAME, SUITE_VERSION
+from evalguard.evaluation.suite import PHASE3_SUITE_NAME, PHASE3_SUITE_VERSION
 
 
 class ApiModel(BaseModel):
@@ -14,8 +14,8 @@ class ApiModel(BaseModel):
 
 
 class ExperimentCreate(ApiModel):
-    suite_name: str = SUITE_NAME
-    suite_version: str = SUITE_VERSION
+    suite_name: str = PHASE3_SUITE_NAME
+    suite_version: str = PHASE3_SUITE_VERSION
     provider: Literal["deterministic-fake"] = "deterministic-fake"
     trials: Literal[1] = 1
 

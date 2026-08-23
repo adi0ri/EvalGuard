@@ -8,13 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field
 class ToolArguments(BaseModel):
     """Reject unknown arguments so provider mistakes fail loudly."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class ToolResult(BaseModel):
     """Keep persisted and replayed tool results strict and closed as well."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class LookupOrderArgs(ToolArguments):
@@ -47,7 +47,12 @@ class IssueRefundResult(ToolResult):
 class ShippingAddress(ToolArguments):
     """A complete, normalized postal address accepted by ParcelDesk."""
 
-    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        str_strip_whitespace=True,
+    )
 
     line1: str = Field(min_length=1, max_length=200)
     line2: str | None = Field(default=None, min_length=1, max_length=200)

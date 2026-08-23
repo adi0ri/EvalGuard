@@ -1,4 +1,4 @@
-"""Phase 2 suite, experiment, and execution endpoints."""
+"""Suite, experiment, and execution endpoints through Phase 3."""
 
 import hashlib
 import logging
@@ -109,8 +109,13 @@ def _execution_ids(session: Session, experiment_id: UUID) -> list[UUID]:
     return list(
         session.scalars(
             select(CaseExecution.id)
+            .join(EvaluationCase, EvaluationCase.id == CaseExecution.case_id)
             .where(CaseExecution.experiment_id == experiment_id)
-            .order_by(CaseExecution.created_at, CaseExecution.id)
+            .order_by(
+                EvaluationCase.key,
+                CaseExecution.trial_number,
+                CaseExecution.id,
+            )
         ).all()
     )
 
@@ -127,8 +132,13 @@ def _execution_rows(session: Session, experiment_id: UUID) -> list[CaseExecution
     return list(
         session.scalars(
             select(CaseExecution)
+            .join(EvaluationCase, EvaluationCase.id == CaseExecution.case_id)
             .where(CaseExecution.experiment_id == experiment_id)
-            .order_by(CaseExecution.created_at, CaseExecution.id)
+            .order_by(
+                EvaluationCase.key,
+                CaseExecution.trial_number,
+                CaseExecution.id,
+            )
         ).all()
     )
 
@@ -147,6 +157,15 @@ def _dispatch_executions(
             extra={"event": "experiment_enqueue_failed", "experiment_id": experiment.id},
         )
         session.rollback()
+        persisted_executions = list(
+            session.scalars(
+                select(CaseExecution)
+                .where(CaseExecution.experiment_id == experiment.id)
+                .order_by(CaseExecution.created_at, CaseExecution.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+        )
         persisted_experiment = session.scalar(
             select(Experiment)
             .where(Experiment.id == experiment.id)
@@ -154,15 +173,6 @@ def _dispatch_executions(
             .execution_options(populate_existing=True)
         )
         if persisted_experiment is not None:
-            persisted_executions = list(
-                session.scalars(
-                    select(CaseExecution)
-                    .where(CaseExecution.experiment_id == persisted_experiment.id)
-                    .order_by(CaseExecution.created_at, CaseExecution.id)
-                    .with_for_update()
-                    .execution_options(populate_existing=True)
-                ).all()
-            )
             accepted_by_worker = persisted_experiment.status in {"running", "completed"} or any(
                 row.status in {"running", "completed"} for row in persisted_executions
             )
@@ -275,11 +285,7 @@ def _create_experiment(
     session.refresh(experiment)
 
     response.headers["Location"] = f"/api/v1/experiments/{experiment.id}"
-    return ExperimentAccepted(
-        id=experiment.id,
-        status=experiment.status,
-        execution_ids=[execution.id for execution in executions],
-    )
+    return _accepted(session, experiment)
 
 
 @router.post(

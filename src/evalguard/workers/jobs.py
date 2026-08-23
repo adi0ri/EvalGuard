@@ -9,9 +9,10 @@ from sqlalchemy import func, select
 
 from evalguard.core.config import get_settings
 from evalguard.core.logging import configure_logging
-from evalguard.db.models import CaseExecution, Experiment, TraceEvent
+from evalguard.db.models import CaseExecution, TraceEvent
 from evalguard.db.session import session_scope
 from evalguard.evaluation.executor import execute_case
+from evalguard.evaluation.lifecycle import reconcile_experiment_status
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,7 @@ def _record_started(case_execution_id: UUID) -> None:
         execution.status = "running"
         if execution.started_at is None:
             execution.started_at = datetime.now(UTC)
-        experiment = session.get(Experiment, execution.experiment_id)
-        if experiment is not None:
-            experiment.status = "running"
+        reconcile_experiment_status(session, execution.experiment_id)
 
 
 def _record_failure(case_execution_id: UUID, error: Exception) -> None:
@@ -45,12 +44,11 @@ def _record_failure(case_execution_id: UUID, error: Exception) -> None:
         execution.started_at = execution.started_at or failure_time
         execution.completed_at = failure_time
         execution.error_message = f"{type(error).__name__}: {error}"[:1000]
-        experiment = session.scalar(
-            select(Experiment).where(Experiment.id == execution.experiment_id).with_for_update()
+        reconcile_experiment_status(
+            session,
+            execution.experiment_id,
+            completed_at=failure_time,
         )
-        if experiment is not None and experiment.status != "completed":
-            experiment.status = "failed"
-            experiment.completed_at = execution.completed_at
         current_sequence = session.scalar(
             select(func.coalesce(func.max(TraceEvent.sequence_number), 0)).where(
                 TraceEvent.case_execution_id == case_execution_id

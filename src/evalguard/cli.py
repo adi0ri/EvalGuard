@@ -14,13 +14,13 @@ from alembic import command
 from evalguard.core.config import get_settings
 from evalguard.core.logging import configure_logging
 from evalguard.db.session import session_scope
-from evalguard.evaluation.suite import seed_initial_suite
+from evalguard.evaluation.suite import seed_initial_suite, seed_phase3_suite
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="evalguard")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("seed", help="Load or verify the immutable baseline suite and scenario")
+    subparsers.add_parser("seed", help="Load or verify every implemented immutable suite")
     subparsers.add_parser(
         "prepare-test-db",
         help="Create and migrate the isolated PostgreSQL database used by pytest",
@@ -73,13 +73,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     configure_logging(settings.log_level)
     if args.command == "seed":
         with session_scope() as session:
-            suite, case = seed_initial_suite(session)
+            legacy_suite, legacy_case = seed_initial_suite(session)
+            suite, cases = seed_phase3_suite(session)
             payload = {
                 "suite_id": str(suite.id),
                 "suite": f"{suite.name}@{suite.version}",
-                "case_id": str(case.id),
-                "case": case.key,
-                "definition_hash": case.definition_hash,
+                "case_count": len(cases),
+                "definition_hash": suite.definition_hash,
+                "legacy_suite": {
+                    "suite_id": str(legacy_suite.id),
+                    "suite": f"{legacy_suite.name}@{legacy_suite.version}",
+                    "case_id": str(legacy_case.id),
+                    "case": legacy_case.key,
+                    "definition_hash": legacy_case.definition_hash,
+                },
             }
         print(json.dumps(payload, sort_keys=True))
         return 0

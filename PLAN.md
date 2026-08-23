@@ -4,10 +4,15 @@ Last updated: 2026-08-22
 
 ## Current milestone
 
-**Phase 0, Phase 1, and Phase 2 — complete.** The four typed domain tools,
-relational Phase 2 state, correctness hardening, PostgreSQL coverage, clean
-migration round trip, Compose startup, and live deterministic smoke are verified.
-Phase 3 and later remain backlog only.
+**Phase 3 — implementation and local acceptance complete; repository closure in
+progress.** The immutable 25-case v2 suite, actor-scoped tools, six deterministic
+grader families, eleven fake behavior IDs, aggregate experiment lifecycle, explicit
+replay evidence, and relational ticket/order owner enforcement are implemented. The
+full PostgreSQL/Redis-backed run passes all 158 tests, and locked installation,
+static checks, the `20260822_0006` migration round trip, Compose startup, idempotent
+live seeding, the live 25-case smoke, and the Redis-unavailable readiness probe have
+passed. Documentation/secret reconciliation, a local Phase 3 commit, push, and any
+observed remote CI remain unchecked below. Phase 4 and later remain backlog only.
 
 ## Phase 0 — repository and architecture foundation
 
@@ -146,10 +151,9 @@ Phase 3 and later remain backlog only.
 - [x] Continue using only the deterministic fake provider; no paid or real API was
   called.
 
-The queued RQ fake remains the single published `eligible-refund` case and selects
-only `lookup_order` followed by `issue_refund`. Phase 2 tool behavior is verified
-through PostgreSQL and API integration coverage; Phase 3 owns the new immutable
-cases and deterministic graders that exercise those tools in queued evaluations.
+The Phase 2 milestone closed with the queued RQ fake still using the single
+published `eligible-refund` case. Phase 3 adds its new immutable suite version and
+queued deterministic breadth without mutating that historical definition.
 
 ## Phase 0/1/2 acceptance gate
 
@@ -189,14 +193,104 @@ cases and deterministic graders that exercise those tools in queued evaluations.
 - [x] Dependency-unavailable readiness was not rerun for Phase 2; the verified
   Phase 1 liveness-`200`/readiness-`503` probe remains the current evidence.
 
+## Phase 3 — complete scenario and grader coverage
+
+### Immutable inputs and policy context
+
+- [x] Preserve published `parceldesk-refunds@1.0.0` and its original hashes.
+- [x] Add published `parceldesk-refunds@2.0.0` with exactly 25 independently
+  authored cases in the required 7 normal / 5 ineligible / 5 boundary / 4
+  authorization / 4 duplicate-or-recovery distribution.
+- [x] Hash every v2 case's key, title, prompt, typed fixture, independent expected
+  policy contract, and deterministic fake plan; hash suite membership by ordered
+  case key and hash.
+- [x] Use a fixed fixture `policy_as_of` timestamp and inclusive 30-day refund
+  window so time-boundary cases never depend on the wall clock.
+- [x] Add Alembic revision `20260822_0006` so a support ticket's customer must own
+  its referenced order even when both rows share one execution; continue using the
+  existing JSON definition/evidence columns for scenario contracts.
+
+### Execution, authorization, grading, and regression behavior
+
+- [x] Materialize multiple execution-owned customers/orders and relational starting
+  addresses from closed typed fixtures.
+- [x] Bind all four tools and cached replay to the trusted requester customer as
+  well as the case execution.
+- [x] Standardize tool lock order as execution row followed by order row, and emit
+  one `tool_replay` trace after the original outcome for successful exact replay
+  without a second invocation or mutation.
+- [x] Execute typed scenario plans through the deterministic fake provider and the
+  production `ToolRuntime`.
+- [x] Add deterministic `state_v1`, `trace_v1`, `policy_v1`,
+  `authorization_v1`, `escalation_v1`, and `resolution_v1` grader families.
+- [x] Grade invocation success/rejection/duplicate outcomes through
+  `trace_v1.invocation_outcomes_match`, grade ticket/order ownership through
+  `escalation_v1.ticket_owner_matches_order`, and include ticket ownership in
+  `state_v1.tickets_exact`.
+- [x] Detect protected numeric as well as string values embedded in free-text
+  resolutions, using token boundaries for strings and recognizing grouped numeric
+  forms such as `9,125`.
+- [x] Add eleven stable fake behavior IDs: one reference behavior and ten
+  deliberately defective modes covering state, trace, policy, authorization,
+  escalation, duplicate intent, and resolution regressions.
+- [x] Derive aggregate experiment lifecycle from all executions under a PostgreSQL
+  parent-row lock, preventing an early case from completing a 25-case experiment.
+- [x] Reject an execution whose case does not belong to its experiment's suite in
+  both queued and completed states, and perform that check before completed replay
+  can return. Freeze typed tool/scenario contracts; bind the resolution and every
+  expected state mutation to the policy order, and reject denied expectations that
+  request address or other state mutation.
+
+### Automated Phase 3 verification
+
+- [x] Verify exact keys, 7/5/5/4/4 counts, complete-contract hashes, closed typed
+  round trips, and cross-customer fixture construction.
+- [x] Verify idempotent v2 PostgreSQL seeding, legacy preservation, exact persisted
+  payloads, and definition-conflict rejection.
+- [x] Verify actor-scoped lookup, mutation, failed-call evidence, and cached replay
+  against PostgreSQL.
+- [x] Verify the reference behavior and all ten defective behaviors through targeted
+  PostgreSQL executions across all six grader families.
+- [x] Verify successful/ineligible/boundary/authorization/duplicate/recovery cases,
+  RQ execution, API submission/retrieval, aggregate lifecycle, and legacy
+  compatibility.
+- [x] Run focused unit coverage: 84 tests passed with one dependency warning in
+  0.38 seconds.
+- [x] Run focused Phase 3 integration coverage: 38 tests passed with one dependency
+  warning in 24.87 seconds.
+- [x] Run the full automated suite: 158 tests passed with one dependency warning in
+  52.51 seconds.
+
+### Phase 3 final acceptance
+
+- [x] Run the locked dependency installation from `uv.lock`: 49 packages checked.
+- [x] Run final-tree Ruff lint and formatting checks after formatting two files;
+  both checks passed. mypy passed all 29 source files.
+- [x] Run Compose configuration plus `docker compose up --build -d --wait`; API,
+  PostgreSQL, and Redis became healthy, the worker ran, and one-shot `migrate` and
+  `test-db` exited 0.
+- [x] Upgrade a blank disposable database through `20260822_0006`, confirm no drift,
+  downgrade `0006` to `0005`, re-upgrade `0005` to `0006`, confirm no drift again,
+  and drop the disposable database.
+- [x] Run the documented loader twice and verify stable v2 suite identity/hash and
+  exactly 25 cases while preserving v1. The verified suite hashes are
+  `28289cfdcd98be852b00e451b2f52ae8a9af65a454a6642bb96acb4991a19782`
+  for v2 and
+  `aaedf653770166eb7e967352b9242509a94dd9ba3e4ee833576617c403ec6abd`
+  for v1.
+- [x] Submit and retrieve one live 25-case deterministic-fake experiment. Initial
+  and replay requests returned `202` with the same identifiers; 25/25 synthetic
+  executions completed with 507/507 passing grader results across six families,
+  44 tool invocations, 164 trace events including one `tool_replay`, 7 refunds, and
+  5 tickets.
+- [x] Stop Redis while the API remained live: liveness returned `200`, readiness
+  returned `503` with Redis unavailable, and readiness returned `200` after restore.
+  Four expected worker Redis connection `ERROR` lines occurred during the outage;
+  zero suspicious lines appeared after restoration.
+- [ ] Complete the final documentation/provenance/secret audit, local Phase 3
+  commit, push, and any remote-CI verification that is actually observed.
+
 ## Backlog — do not implement during the current milestone
-
-### Phase 3: complete scenario and grader coverage
-
-- [ ] Expand to exactly 25 versioned original scenarios in the required category
-  distribution.
-- [ ] Add deterministic state, trace, policy, authorization, and escalation graders.
-- [ ] Add intentionally defective fake-agent behaviors for regression validation.
 
 ### Phase 4: resilience
 
@@ -223,7 +317,7 @@ cases and deterministic graders that exercise those tools in queued evaluations.
 | --- | --- |
 | Docker or service tooling is unavailable locally | Detect early, record exact failure, and do not infer runtime success from static configuration. |
 | Windows/PowerShell commands diverge from CI | Exercise documented local commands on Windows and keep CI commands equivalent in behavior. |
-| API persistence succeeds but queue dispatch fails | Model lifecycle states explicitly, hold same-key serialization through dispatch outcome, and surface `enqueue_failed`; Phase 4 hardens wider crash-window recovery. |
+| API persistence succeeds but queue dispatch fails | Model lifecycle states explicitly, hold same-key serialization through dispatch outcome, and surface `enqueue_failed`; partial multi-job enqueue crash windows and outbox-style recovery remain Phase 4 work. |
 | A worker repeats a state-changing call | Carry stable job/tool identities, require exact replay intent, lock decision rows, and enforce database uniqueness plus semantic convergence. |
 | Parallel executions leak business state | Scope ownership through execution foreign keys, including composite ticket ownership, and test cross-execution access denial. |
 | Publication races with a late case write | Serialize both paths on suite-row locks and test the concurrent insert boundary. |
@@ -232,14 +326,15 @@ cases and deterministic graders that exercise those tools in queued evaluations.
 | Documentation drifts from behavior | Update durable documents with the implementing change and gate completion on exercised commands. |
 | A real-provider run introduces cost or secrets | Keep real providers in Phase 6 and require explicit user approval. |
 
-No Phase 0/1/2 implementation or local-runtime blocker is known. One upstream
-FastAPI/Starlette `TestClient` deprecation warning is recorded in `PROGRESS.md`;
-the full local Phase 2 suite passes. Remote CI has not been rerun for the unpushed
-Phase 2 change.
+No Phase 0/1/2 implementation or Phase 3 local-acceptance blocker is known. One
+upstream FastAPI/Starlette `TestClient` deprecation warning is recorded in
+`PROGRESS.md`; the full Phase 3 suite passes 158 tests. Phase 2 is pushed at
+`26c3e86`. Phase 3 is not yet committed or pushed, and no Phase 3 remote-CI result
+is claimed. Partial multi-job enqueue crash-window/outbox recovery remains Phase 4.
 
 ## Precise next action
 
-The precise next unchecked phase is Phase 3: add the remaining independently
-authored, immutable scenarios and deterministic policy, authorization, escalation,
-and defect-detection graders. Do not start it until the user explicitly advances
-the milestone.
+Finish the unchecked documentation/secret audit, create a local Phase 3 commit if
+Git identity remains configured, push only under the user's existing authorization,
+and record only remote CI that is actually observed. Do not begin Phase 4 until the
+user explicitly advances that milestone.

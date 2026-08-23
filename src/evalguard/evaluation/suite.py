@@ -1,4 +1,4 @@
-"""The one original, versioned ParcelDesk suite implemented in Phase 1."""
+"""Immutable ParcelDesk suite loading for the legacy and Phase 3 inventories."""
 
 import hashlib
 import json
@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from evalguard.db.models import EvaluationCase, EvaluationSuite
+from evalguard.evaluation.scenarios import PHASE3_SCENARIOS, ScenarioDefinition
 
 SUITE_NAME = "parceldesk-refunds"
 SUITE_VERSION = "1.0.0"
@@ -129,3 +130,137 @@ def seed_initial_suite(session: Session) -> tuple[EvaluationSuite, EvaluationCas
         session.flush()
 
     return suite, case
+
+
+PHASE3_SUITE_NAME = SUITE_NAME
+PHASE3_SUITE_VERSION = "2.0.0"
+PHASE3_SUITE_DESCRIPTION = (
+    "Twenty-five synthetic ParcelDesk support scenarios across state, policy, "
+    "authorization, escalation, duplicate, and recovery behavior."
+)
+
+
+def _phase3_case_payload(scenario: ScenarioDefinition) -> dict[str, Any]:
+    """Return every reproducibility-relevant field stored for one Phase 3 case."""
+
+    return scenario.model_dump(mode="json")
+
+
+PHASE3_CASE_DEFINITION_HASHES: dict[str, str] = {
+    scenario.key: definition_hash(_phase3_case_payload(scenario)) for scenario in PHASE3_SCENARIOS
+}
+PHASE3_SUITE_DEFINITION_HASH = definition_hash(
+    {
+        "name": PHASE3_SUITE_NAME,
+        "version": PHASE3_SUITE_VERSION,
+        "cases": [
+            {
+                "key": key,
+                "definition_hash": PHASE3_CASE_DEFINITION_HASHES[key],
+            }
+            for key in sorted(PHASE3_CASE_DEFINITION_HASHES)
+        ],
+    }
+)
+
+
+def seed_phase3_suite(
+    session: Session,
+) -> tuple[EvaluationSuite, tuple[EvaluationCase, ...]]:
+    """Insert or exactly verify the immutable 25-case Phase 3 suite."""
+
+    for scenario in PHASE3_SCENARIOS:
+        current_hash = definition_hash(_phase3_case_payload(scenario))
+        expected_hash = PHASE3_CASE_DEFINITION_HASHES[scenario.key]
+        if current_hash != expected_hash:
+            raise SuiteDefinitionConflictError(
+                f"Source-controlled case {scenario.key} changed after hash calculation"
+            )
+
+    suite = session.scalar(
+        select(EvaluationSuite)
+        .where(
+            EvaluationSuite.name == PHASE3_SUITE_NAME,
+            EvaluationSuite.version == PHASE3_SUITE_VERSION,
+        )
+        .with_for_update()
+    )
+    if suite is None:
+        suite = EvaluationSuite(
+            name=PHASE3_SUITE_NAME,
+            version=PHASE3_SUITE_VERSION,
+            description=PHASE3_SUITE_DESCRIPTION,
+            definition_hash=PHASE3_SUITE_DEFINITION_HASH,
+            is_published=False,
+        )
+        session.add(suite)
+        session.flush()
+    elif suite.definition_hash != PHASE3_SUITE_DEFINITION_HASH:
+        raise SuiteDefinitionConflictError(
+            f"Stored suite {PHASE3_SUITE_NAME} {PHASE3_SUITE_VERSION} "
+            "has a different definition hash"
+        )
+
+    persisted_by_key = {
+        case.key: case
+        for case in session.scalars(
+            select(EvaluationCase)
+            .where(EvaluationCase.suite_id == suite.id)
+            .order_by(EvaluationCase.key)
+        ).all()
+    }
+    expected_keys = {scenario.key for scenario in PHASE3_SCENARIOS}
+    if set(persisted_by_key).difference(expected_keys):
+        raise SuiteDefinitionConflictError(
+            f"Stored suite {PHASE3_SUITE_NAME} {PHASE3_SUITE_VERSION} "
+            "has unexpected case membership"
+        )
+
+    for scenario in PHASE3_SCENARIOS:
+        fixture_payload = scenario.fixture.model_dump(mode="json")
+        expected_payload = scenario.expected.model_dump(mode="json")
+        expected_hash = PHASE3_CASE_DEFINITION_HASHES[scenario.key]
+        case = persisted_by_key.get(scenario.key)
+        if case is None:
+            if suite.is_published:
+                raise SuiteDefinitionConflictError(
+                    f"Stored published suite {PHASE3_SUITE_NAME} "
+                    f"{PHASE3_SUITE_VERSION} is missing case {scenario.key}"
+                )
+            case = EvaluationCase(
+                suite_id=suite.id,
+                key=scenario.key,
+                title=scenario.title,
+                prompt=scenario.prompt,
+                definition_hash=expected_hash,
+                fixture=fixture_payload,
+                expected=expected_payload,
+            )
+            session.add(case)
+            session.flush()
+            persisted_by_key[scenario.key] = case
+            continue
+
+        if (
+            case.definition_hash != expected_hash
+            or case.title != scenario.title
+            or case.prompt != scenario.prompt
+            or case.fixture != fixture_payload
+            or case.expected != expected_payload
+        ):
+            raise SuiteDefinitionConflictError(
+                f"Stored case {scenario.key} has a different Phase 3 definition"
+            )
+
+    persisted_cases = tuple(persisted_by_key[key] for key in sorted(expected_keys))
+    if len(persisted_cases) != len(PHASE3_SCENARIOS):
+        raise SuiteDefinitionConflictError(
+            f"Stored suite {PHASE3_SUITE_NAME} {PHASE3_SUITE_VERSION} "
+            "does not have its exact case membership"
+        )
+
+    if not suite.is_published:
+        suite.is_published = True
+        session.flush()
+
+    return suite, persisted_cases

@@ -64,9 +64,16 @@ def _record_trace(
 class ToolRuntime:
     """Bind every tool lookup and mutation to one isolated case execution."""
 
-    def __init__(self, session: Session, case_execution_id: UUID) -> None:
+    def __init__(
+        self,
+        session: Session,
+        case_execution_id: UUID,
+        *,
+        actor_customer_external_id: str | None = None,
+    ) -> None:
         self.session = session
         self.case_execution_id = case_execution_id
+        self.actor_customer_external_id = actor_customer_external_id
 
     def trace(self, event_type: str, payload: dict[str, Any]) -> TraceEvent:
         return _record_trace(self.session, self.case_execution_id, event_type, payload)
@@ -91,17 +98,25 @@ class ToolRuntime:
             raise ToolExecutionError(f"Execution {self.case_execution_id} was not found")
 
     def _locked_order(self, order_id: str) -> Order:
-        """Lock one execution-owned order before evaluating or changing its state."""
+        """Lock one execution- and, when supplied, actor-owned order."""
 
-        order = self.session.scalar(
-            select(Order)
-            .where(
-                Order.case_execution_id == self.case_execution_id,
-                Order.external_id == order_id,
-            )
-            .with_for_update()
+        statement = select(Order).where(
+            Order.case_execution_id == self.case_execution_id,
+            Order.external_id == order_id,
         )
+        if self.actor_customer_external_id is not None:
+            statement = statement.join(
+                Customer,
+                (Customer.id == Order.customer_id)
+                & (Customer.case_execution_id == Order.case_execution_id),
+            ).where(
+                Customer.case_execution_id == self.case_execution_id,
+                Customer.external_id == self.actor_customer_external_id,
+            )
+        order = self.session.scalar(statement.with_for_update(of=Order))
         if order is None:
+            if self.actor_customer_external_id is not None:
+                raise ToolExecutionError("Order was not found or is unavailable to this customer")
             raise ToolExecutionError(f"Order {order_id} was not found in this execution")
         return order
 
@@ -111,12 +126,20 @@ class ToolRuntime:
         tool_name: str,
         arguments: BaseModel,
         result_type: type[ToolResultT],
+        order_id: str,
     ) -> ToolResultT | None:
         """Replay only when a stable call ID represents exactly the same intent."""
 
         cached = self._cached_invocation(tool_call_id)
         if cached is None:
             return None
+
+        # The trusted actor is execution context rather than provider-controlled tool
+        # input, so it is intentionally absent from persisted arguments. Re-check
+        # ownership before replaying to prevent a different actor in the same execution
+        # from receiving another customer's cached result.
+        if self.actor_customer_external_id is not None:
+            self._locked_order(order_id)
 
         validated_arguments = arguments.model_dump(mode="json")
         if cached.tool_name != tool_name or cached.arguments != validated_arguments:
@@ -133,11 +156,21 @@ class ToolRuntime:
         if cached.status != "completed" or cached.result is None:
             raise ToolExecutionError(f"Tool call {tool_call_id} is not replayable")
         try:
-            return result_type.model_validate(cached.result)
+            result = result_type.model_validate(cached.result)
         except ValidationError as exc:
             raise ToolExecutionError(
                 f"Tool call {tool_call_id} has an invalid persisted result"
             ) from exc
+        self.trace(
+            "tool_replay",
+            {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "arguments": validated_arguments,
+                "result": cached.result,
+            },
+        )
+        return result
 
     def _start_invocation(
         self,
@@ -212,22 +245,14 @@ class ToolRuntime:
             "lookup_order",
             arguments,
             LookupOrderResult,
+            arguments.order_id,
         )
         if cached is not None:
             return cached
 
         invocation = self._start_invocation(tool_call_id, "lookup_order", arguments)
         try:
-            order = self.session.scalar(
-                select(Order).where(
-                    Order.case_execution_id == self.case_execution_id,
-                    Order.external_id == arguments.order_id,
-                )
-            )
-            if order is None:
-                raise ToolExecutionError(
-                    f"Order {arguments.order_id} was not found in this execution"
-                )
+            order = self._locked_order(arguments.order_id)
             customer = self.session.scalar(
                 select(Customer).where(
                     Customer.id == order.customer_id,
@@ -257,6 +282,7 @@ class ToolRuntime:
             "issue_refund",
             arguments,
             IssueRefundResult,
+            arguments.order_id,
         )
         if cached is not None:
             return cached
@@ -327,6 +353,7 @@ class ToolRuntime:
             "update_shipping_address",
             arguments,
             UpdateShippingAddressResult,
+            arguments.order_id,
         )
         if cached is not None:
             return cached
@@ -395,6 +422,7 @@ class ToolRuntime:
             "escalate_ticket",
             arguments,
             EscalateTicketResult,
+            arguments.order_id,
         )
         if cached is not None:
             return cached

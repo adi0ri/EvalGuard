@@ -252,6 +252,12 @@ class Order(Base):
         ),
         UniqueConstraint("case_execution_id", "external_id", name="uq_orders_execution_external"),
         UniqueConstraint("id", "case_execution_id", name="uq_orders_id_execution"),
+        UniqueConstraint(
+            "id",
+            "customer_id",
+            "case_execution_id",
+            name="uq_orders_id_customer_execution",
+        ),
         Index("ix_orders_case_execution_id", "case_execution_id"),
     )
 
@@ -331,6 +337,12 @@ class SupportTicket(Base):
             ["order_id", "case_execution_id"],
             ["orders.id", "orders.case_execution_id"],
             name="fk_support_tickets_order_execution",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["order_id", "customer_id", "case_execution_id"],
+            ["orders.id", "orders.customer_id", "orders.case_execution_id"],
+            name="fk_support_tickets_order_customer_execution",
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(

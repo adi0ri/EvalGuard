@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from evalguard.core.config import get_settings
 from evalguard.db.models import Base, CaseExecution, Customer, Experiment, Order
-from evalguard.evaluation.suite import seed_initial_suite
+from evalguard.evaluation.suite import seed_initial_suite, seed_phase3_suite
 from evalguard.workers.queue import get_queue
 
 SessionFactory = sessionmaker[Session]
@@ -56,6 +56,13 @@ class SeededDefinition:
 
     suite_id: UUID
     case_id: UUID
+    case_ids_by_key: Mapping[str, UUID]
+
+    def case_id_for(self, case_key: str) -> UUID:
+        try:
+            return self.case_ids_by_key[case_key]
+        except KeyError as exc:
+            raise ValueError(f"Seeded suite has no case {case_key!r}") from exc
 
 
 def _truncate_application_tables(engine: Engine) -> None:
@@ -184,9 +191,28 @@ def db_session(session_factory: SessionFactory) -> Iterator[Session]:
 
 @pytest.fixture
 def seeded_suite(db_session: Session) -> SeededDefinition:
+    # Keep the published Phase 1 contract available for explicit compatibility
+    # requests while making the canonical Phase 3 inventory the fixture default.
+    seed_initial_suite(db_session)
+    suite, cases = seed_phase3_suite(db_session)
+    db_session.commit()
+    case_ids_by_key = {case.key: case.id for case in cases}
+    return SeededDefinition(
+        suite_id=suite.id,
+        case_id=case_ids_by_key["eligible-refund"],
+        case_ids_by_key=case_ids_by_key,
+    )
+
+
+@pytest.fixture
+def seeded_legacy_suite(db_session: Session) -> SeededDefinition:
     suite, case = seed_initial_suite(db_session)
     db_session.commit()
-    return SeededDefinition(suite_id=suite.id, case_id=case.id)
+    return SeededDefinition(
+        suite_id=suite.id,
+        case_id=case.id,
+        case_ids_by_key={case.key: case.id},
+    )
 
 
 @pytest.fixture
@@ -204,6 +230,7 @@ def execution_factory(
         total_cents: int = 4599,
         order_status: str = "delivered",
         shipping_address: dict[str, str | None] | None = None,
+        case_key: str | None = None,
     ) -> UUID:
         nonlocal created
         created += 1
@@ -221,7 +248,9 @@ def execution_factory(
             session.flush()
             execution = CaseExecution(
                 experiment_id=experiment.id,
-                case_id=seeded_suite.case_id,
+                case_id=(
+                    seeded_suite.case_id if case_key is None else seeded_suite.case_id_for(case_key)
+                ),
                 trial_number=1,
                 status="queued",
             )

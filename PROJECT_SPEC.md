@@ -2,11 +2,13 @@
 
 ## Status
 
-Phase 0, Phase 1, and Phase 2 are complete: implementation, PostgreSQL-backed
-tests, migration verification, and local runtime checks all closed successfully.
-This specification defines both the current vertical slice and the complete V1
-contract. Phase 3 and later requirements are constraints to preserve in the design,
-not authorization to implement them now.
+Phase 0, Phase 1, and Phase 2 are complete. Phase 3 implementation and local
+acceptance are complete: 158 tests, locked installation, static checks, the clean
+`20260822_0006` migration round trip, Compose startup, a live 25-case smoke, and a
+Redis-unavailable readiness probe passed. Phase 3 remains uncommitted and unpushed,
+and no Phase 3 remote-CI result is claimed. This specification defines the
+implemented Phase 3 breadth and the remaining V1 contract. Phase 4 and later
+requirements are constraints to preserve, not authorization to implement them now.
 
 ## Product outcome
 
@@ -27,25 +29,24 @@ exercise.
 ## Users and core workflow
 
 The initial user is a developer or evaluator comparing agent behavior. In the
-current queued vertical slice, that user:
+current Phase 3 workflow, that user:
 
-1. loads an immutable evaluation suite containing one original eligible-refund
-   scenario;
+1. loads the preserved one-case legacy suite and the immutable 25-case v2 suite;
 2. submits an experiment;
-3. receives `202 Accepted` after the experiment and its case execution are stored;
-4. lets an RQ worker run the deterministic fake provider;
-5. retrieves the experiment and execution; and
+3. receives `202 Accepted` after the experiment and all 25 case executions are
+   stored;
+4. lets RQ workers run the deterministic fake provider across those executions;
+5. retrieves the aggregate experiment and individual executions; and
 6. inspects the stored business outcome, ordered trace, and criterion-level grader
    result.
 
-The evaluated fake agent looks up the eligible ParcelDesk order and issues the
-refund through typed tools. The refund is committed transactionally. The grader
-then determines correctness from final PostgreSQL state and trace evidence.
-Phase 2's two additional tools use the same production `ToolRuntime` and are
-verified against PostgreSQL and through API retrieval, but the queued deterministic
-fake still selects only `lookup_order` followed by `issue_refund`. Phase 3 owns the
-new versioned cases and graders that will cause queued evaluations to select the
-Phase 2 tools.
+The deterministic fake follows each case's typed, hashed plan through the same four
+production tools used by the worker. Six deterministic grader families then inspect
+final PostgreSQL state, ordered trace, policy, actor authorization, escalation, and
+structured resolution evidence. An experiment stays running while any of its case
+executions is nonterminal, completes only when all complete, and fails when every
+case is terminal and at least one failed. These results remain synthetic
+infrastructure validation rather than model-quality evidence.
 
 ## Current milestone scope
 
@@ -97,16 +98,50 @@ Phase 2 tools.
 - Deterministic PostgreSQL, API, RQ-worker, and end-to-end coverage listed in
   `PLAN.md`; no SQLite or real/paid provider is used.
 
+### Phase 3: complete scenario and deterministic grader coverage
+
+- The published `parceldesk-refunds@1.0.0` suite and its original definition
+  hashes remain unchanged.
+- A separately published `parceldesk-refunds@2.0.0` suite contains exactly 25
+  source-controlled cases: 7 normal successes, 5 ineligible requests, 5 policy
+  boundaries, 4 authorization/privacy cases, and 4 duplicate/recovery cases.
+- Typed Phase 3 fixtures support multiple execution-owned customers and orders, an
+  explicit requester identity, relational starting addresses, and a fixed
+  `policy_as_of` timestamp with an inclusive 30-day refund window. Frozen
+  cross-field contracts bind the resolution and every expected state mutation to
+  the policy target, and forbid denied outcomes from expecting address or other
+  state mutations.
+- The production `ToolRuntime` scopes lookup, mutation, and cached replay to the
+  trusted requester customer as well as the case execution. Successful exact replay
+  emits one `tool_replay` event after the original outcome without another
+  invocation or mutation.
+- Six deterministic grader families independently inspect state, trace, policy,
+  authorization/privacy, escalation, and final structured resolution. Trace grading
+  checks invocation outcomes and replay ordering, escalation grading checks that
+  each ticket's customer owns its order, and privacy grading detects protected
+  string or numeric values embedded in free text. String comparison uses token
+  boundaries so a short value such as `US` does not match inside `CUSTOMER`, while
+  numeric comparison recognizes grouped forms such as `9,125`.
+- The deterministic fake has one reference behavior and ten deliberately defective
+  behavior IDs for regression validation. It uses typed plans and the production
+  tools; it does not call a model or paid API.
+- Experiment lifecycle is derived under a PostgreSQL row lock from every case
+  execution, preventing one early completion from terminating a 25-case run.
+- Revision `20260822_0006` adds a composite order/customer/execution relationship
+  so PostgreSQL rejects a ticket whose customer does not own its order, even when
+  all rows share one execution. Other Phase 3 definitions reuse the existing JSON
+  fixture/evidence columns and relational business tables.
+
 ## Target V1 domain contract
 
-The current Phase 2 product exposes these four typed tools:
+The current Phase 3 product exposes these four typed tools:
 
 - `lookup_order`
 - `update_shipping_address`
 - `issue_refund`
 - `escalate_ticket`
 
-The completed product contains exactly 25 independently authored scenarios:
+The immutable v2 suite contains exactly 25 independently authored scenarios:
 
 | Category | Count |
 | --- | ---: |
@@ -114,14 +149,14 @@ The completed product contains exactly 25 independently authored scenarios:
 | Ineligible requests | 5 |
 | Policy-boundary cases | 5 |
 | Authorization/privacy cases | 4 |
-| Duplicate, timeout, or recovery cases | 4 |
+| Duplicate or recovery cases | 4 |
 | **Total** | **25** |
 
-This is a target inventory, not a claim that those scenarios currently exist. The
-inventory covers eligible and expired refunds, high-value escalation, address
-changes before shipment, cross-customer access rejection, duplicate-refund
-prevention, temporary provider/tool recovery, and escalation when information is
-missing.
+This implemented inventory covers eligible and expired refunds, high-value
+escalation, address changes before shipment, cross-customer access rejection,
+duplicate-effect prevention, deterministic recovery after a lookup miss, and
+escalation when information is missing. Generic timeouts, bounded retries, worker
+recovery, and fault injection remain Phase 4 work.
 
 Every execution begins with isolated synthetic ParcelDesk state. Primary graders
 inspect final PostgreSQL state, ordered tool traces, arguments, forbidden actions,
@@ -185,32 +220,51 @@ API and worker processes share the same application code and PostgreSQL data.
   membership changes and prevent mutation/deletion of the suite or
   insertion/mutation/movement/deletion of its cases after publication.
 - Case and prompt definitions have reproducible hashes.
+- The v2 case hash covers the stable key, title, prompt, typed fixture, independent
+  expected policy oracle, and deterministic fake plan. The suite hash covers
+  ordered case-key/hash membership.
 - Operational customer, order, refund, and ticket rows are isolated by case
   execution.
+- An execution may evaluate only a case belonging to its parent experiment's suite;
+  the executor rejects inconsistent references before materializing state or
+  returning an already-completed execution as replayed.
+- Phase 3 tools additionally bind order access and cached replay to the trusted
+  requester customer from the case fixture; provider-controlled tool arguments do
+  not choose that actor.
 - `(experiment_id, case_id, trial_number)` is unique.
 - `(case_execution_id, tool_call_id)` is unique.
 - Duplicate delivery cannot repeat a state-changing operation.
 - A stable call ID can replay only the same validated tool intent; reuse for a
-  different tool or arguments is rejected.
+  different tool or arguments is rejected. A successful replay appends one
+  `tool_replay` event containing the persisted arguments and result after the
+  original tool outcome but creates no second `ToolInvocation`,
+  `tool_call`/`tool_result` pair, or business mutation.
 - Refund creation, address mutation, and escalation creation occur with their
   associated invocation/evidence in the caller's transaction. Policy/ownership
   rejections reached after invocation start leave a failed invocation plus ordered
   `tool_error` evidence when the transaction is committed.
-- Execution and order row locks serialize state-changing decisions. Repeating the
+- Execution and order row locks serialize state-changing decisions in that order.
+  Repeating the
   same address or escalation with a new call ID converges on the existing semantic
   state rather than repeating the mutation.
 - Shipping addresses can change only for `pending` or `processing` orders.
 - A refund whose order total is at least 50,000 cents requires a
   `high_value_refund` escalation instead of refund creation.
+- Refund-window grading uses the fixture's fixed policy timestamp and an inclusive
+  30-day boundary, never the wall clock.
 - One support ticket exists per execution, order, and reason code; its customer,
   order, and originating tool call must belong to that execution through composite
-  foreign keys.
+  foreign keys. Revision `20260822_0006` additionally requires the ticket customer
+  to equal the referenced order's customer.
 - Phase 1 does not mutate the order row when creating a refund.
 - Foreign keys preserve ownership and execution boundaries.
 - Indexes support uniqueness and expected experiment/execution/trace retrieval.
 - Relational business state is not hidden inside one giant JSON document.
 - JSON is allowed for naturally structured fixtures, provider/tool payloads, trace
   details, and grader evidence.
+- An experiment cannot become terminal from one case alone: while any execution is
+  nonterminal it is `running`; after all are terminal it is `failed` if any failed
+  or `completed` otherwise.
 
 ## API contract
 
@@ -230,14 +284,18 @@ experiment/execution retrieval to verify the complete slice. Experiment submissi
 returns `202 Accepted` only after durable records exist and work has been accepted
 for background processing. The creation endpoint accepts an
 `Idempotency-Key`: compatible replay returns the existing experiment, and replay of
-an `enqueue_failed` experiment re-dispatches its existing execution. Concurrent
+an `enqueue_failed` experiment re-dispatches its existing executions. Concurrent
 requests for the same key are serialized by a PostgreSQL advisory lock held on one
 dedicated connection/session across durable persistence, enqueue, and dispatch
-outcome, so compatible requests converge on one experiment and one initial enqueue.
-The current one-suite, literal-fake-provider request shape still does not expose a
-broad conflicting-intent matrix. Wider crash-window recovery remains Phase 4 work.
+outcome, so compatible requests converge on one experiment and one initial enqueue
+per selected execution.
+The current literal-fake-provider request shape still does not expose a broad
+conflicting-intent matrix. Wider crash-window recovery remains Phase 4 work.
+In particular, dispatching a multi-case experiment is not atomic across all Redis
+enqueue calls: a process failure after only some jobs are accepted still requires
+outbox-style reconciliation or recovery in Phase 4.
 Execution retrieval includes structured order shipping addresses and support
-tickets.
+tickets, and experiment retrieval exposes every v2 case execution.
 
 ## Reproducibility and evidence
 
@@ -265,13 +323,24 @@ tickets.
   creates/migrates the test database; fixtures refuse destructive cleanup outside
   test mode, a `*_test` database, a non-development Redis database, and the
   test-only queue.
-- **Regression tests** begin with negative grader cases that prove absent and
-  incorrect refunds are detected; later intentionally defective agent behaviors
-  will broaden this layer.
+- **Regression tests** include negative refund evidence and eleven stable fake
+  behavior IDs: one reference behavior plus defects for omitted action, tool order,
+  refund amount, address, escalation metadata, forbidden action, protected-field
+  disclosure, omitted escalation, repeated mutation intent, and mismatched
+  resolution references.
 - **Phase 2 correctness tests** exercise accepted and rejected address changes,
   high-value escalation, stable-call and semantic duplicates, concurrent
   convergence, failed invocation evidence, composite ownership constraints,
   cross-execution denial, and concurrent API idempotency.
+- **Phase 3 correctness tests** validate the exact 25-case distribution and hashes,
+  immutable/idempotent v2 seeding, fixed-clock policy boundaries, actor-scoped
+  tools and replay evidence, all six grader families, all ten defective fake
+  behaviors, aggregate lifecycle, execution/case suite consistency, same-execution
+  ticket/order/customer ownership, PostgreSQL scenario execution, RQ integration,
+  API retrieval, and the preserved legacy path. The full automated run passes 158
+  tests in 52.51 seconds; the focused unit run passes 84 tests in 0.38 seconds, and
+  the focused Phase 3 integration run passes 38 tests in 24.87 seconds. Each run
+  emits one recorded dependency warning.
 - **End-to-end tests** cross the API, queue, worker, tools, persistence, grader, and
   retrieval boundary with the deterministic fake provider.
 - **Smoke tests** verify container startup, clean migration, liveness, and readiness
@@ -284,9 +353,9 @@ databases, Kubernetes, Kafka, microservices, billing, multiple real providers,
 generic plugin systems, or unrequested cloud deployment. Do not add LangChain
 without a later concrete need. Do not use an LLM judge as primary correctness.
 
-## Phase 0/1/2 definition of done
+## Phase 0/1/2/3 definition of done
 
-Phase 0/1/2 is complete only when every item below has been exercised and recorded:
+Phase 0/1/2/3 is complete only when every item below has been exercised and recorded:
 
 - Docker Compose builds and starts API, worker, PostgreSQL, and Redis.
 - Alembic upgrades a clean PostgreSQL database.
@@ -300,6 +369,9 @@ Phase 0/1/2 is complete only when every item below has been exercised and record
   convergence, and durable rejected-call evidence against PostgreSQL.
 - The Phase 2 migration upgrades a clean database, downgrades to its predecessor,
   re-upgrades to head, and reports no model drift.
+- The Phase 3 ownership migration upgrades a clean database to
+  `20260822_0006`, downgrades to `20260822_0005`, re-upgrades to head, and reports
+  no model drift.
 - Concurrent same-key API submissions converge while holding serialization through
   the enqueue outcome, and execution retrieval exposes address/ticket state.
 - Ruff, mypy, and pytest pass.
@@ -307,16 +379,26 @@ Phase 0/1/2 is complete only when every item below has been exercised and record
 - README setup commands have actually been exercised.
 - No secrets or proprietary material are present.
 - Durable project documents match the actual implementation.
+- The legacy suite remains unchanged and v2 loads exactly 25 cases in the required
+  7/5/5/4/4 distribution with reproducible complete-contract hashes.
+- Correct reference behavior passes six deterministic grader families. All ten
+  defective behavior IDs have deterministic typed transformations and targeted
+  PostgreSQL executions that fail criteria across all six families.
+- Actor ownership is enforced by production tools and cross-customer cases reveal
+  no protected state or unauthorized mutation.
+- Exact replay is actor-checked and leaves explicit `tool_replay` evidence; ticket
+  rows cannot name a same-execution customer who does not own their order.
+- A 25-case experiment stays nonterminal until all executions are terminal and
+  derives its aggregate success or failure from the full set.
 
 No checklist item may be inferred from code review alone when the criterion requires
 a running service or command.
 
 ## Full V1 definition of done
 
-In addition to the Phase 0/1/2 foundation and the four implemented typed tools, V1
-is done when all 25 versioned scenarios exist; state, trace, policy, authorization,
-escalation, and recovery graders are deterministic; bounded retries, timeout
-handling, duplicate-delivery protection, worker recovery, maximum-step enforcement,
+In addition to the Phase 0/1/2/3 foundation and the four implemented typed tools,
+V1 is done when bounded retries, timeout handling, duplicate-delivery protection,
+worker recovery, maximum-step enforcement,
 and fault injection are verified; aggregate experiment comparison and a small
 server-rendered report exist; and the documented 25-case, two-prompt,
 three-trial comparison can produce 150 raw, reproducible executions. The optional

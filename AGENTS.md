@@ -14,10 +14,18 @@ ParcelDesk support domain.
   `issue_refund`, then graded from persisted state and trace evidence.
 - Phase 2 adds typed `update_shipping_address` and `escalate_ticket` tools,
   relational shipping-address and support-ticket state, stronger transactional
-  idempotency, and PostgreSQL-backed correctness coverage. The queued fake-provider
-  scenario remains the Phase 1 refund path; Phase 3 owns new versioned scenarios
-  and graders.
-- Do not begin Phase 3 or later work unless the user explicitly advances the
+  idempotency, and PostgreSQL-backed correctness coverage.
+- Phase 3 implementation and local acceptance are complete: the immutable legacy
+  `parceldesk-refunds@1.0.0` suite remains available, and
+  `parceldesk-refunds@2.0.0` contains exactly 25 independently authored cases in
+  the required 7/5/5/4/4 distribution. Actor-scoped tools, six deterministic
+  grader families, eleven deterministic fake-behavior IDs, and aggregate
+  experiment lifecycle handling are covered by the 158-test suite. Revision
+  `20260822_0006` enforces that each ticket customer owns its order. Locked
+  installation, static checks, clean migration round trip, Compose startup, the
+  live 25-case smoke, and the Redis-unavailable readiness probe all passed. Phase 3
+  remains uncommitted and unpushed; no Phase 3 remote-CI result is claimed.
+- Do not begin Phase 4 or later work unless the user explicitly advances the
   milestone. Record later ideas in `PLAN.md` instead.
 
 ## Engineering rules
@@ -59,9 +67,20 @@ ParcelDesk support domain.
   fixtures, model/tool payloads, trace payloads, and similar evidence.
 - State-changing tools run transactionally and must be safe against repeated job
   or tool delivery. Enforce important uniqueness rules in PostgreSQL as well as in
-  application logic.
+  application logic. Acquire the execution lock before the order lock consistently.
 - Tools use typed arguments. Record ordered calls, results, failures, and the final
-  structured resolution as trace evidence.
+  structured resolution as trace evidence. A successful exact cached replay emits
+  one `tool_replay` event after the original outcome without a second invocation or
+  mutation.
+- Keep source scenario/tool contracts frozen and cross-field validated. A resolution
+  and every expected state mutation must target the policy order, and denied
+  outcomes cannot expect state mutation.
+- Validate case/experiment suite membership before execution or completed replay.
+  Authorization grading must detect protected string and numeric values in free
+  text as well as structured fields, using token boundaries for strings and
+  recognizing grouped numeric forms such as `9,125`.
+- A support ticket's customer must own its order, not merely share the same case
+  execution. Enforce that relationship in PostgreSQL.
 - Primary correctness comes from deterministic graders that inspect persisted
   state and traces. An LLM judge is never the primary source of truth.
 - CI and local development must work without an API key through the deterministic
@@ -71,7 +90,7 @@ ParcelDesk support domain.
 
 ## Required verification
 
-Before claiming Phase 0/1/2 complete, run and record the exact commands and results
+Before claiming Phase 0/1/2/3 complete, run and record the exact commands and results
 for all of the following:
 
 1. Dependency installation from the committed lockfile.
@@ -92,6 +111,17 @@ for all of the following:
     escalation, duplicate state-changing calls, execution isolation, and API/RQ
     integration.
 12. Clean upgrade, downgrade, and re-upgrade coverage for the Phase 2 migration.
+13. Phase 3 suite loading with the immutable legacy suite preserved and exactly 25
+    v2 cases in the 7/5/5/4/4 category distribution.
+14. Phase 3 PostgreSQL, API, RQ, and end-to-end coverage for actor ownership, all
+    four tools, six deterministic grader families, defective fake behaviors, and
+    aggregate experiment lifecycle, including execution/case suite consistency.
+15. A live 25-case deterministic-fake experiment that remains nonterminal until
+    every case is terminal and exposes state, traces, and grader evidence.
+16. Clean upgrade, downgrade to `20260822_0005`, and re-upgrade coverage for the
+    Phase 3 ownership migration `20260822_0006`, followed by a schema-drift check.
+17. Successful stable-call replay evidence through `tool_replay`, same-execution
+    ticket/order/customer ownership rejection, and the current grader criteria.
 
 Do not claim the milestone is complete while any acceptance item in `PLAN.md` is
 unchecked or unverified.

@@ -61,10 +61,24 @@ def test_simple_worker_persists_state_trace_and_grades(
             select(Refund).where(Refund.case_execution_id == execution_id)
         ).all()
         assert [(customer.external_id, customer.email) for customer in customers] == [
-            ("CUST-1001", "maya.chen@example.test")
+            ("CUST-1001", "customer-1001@example.test")
         ]
         assert [(order.external_id, order.total_cents) for order in orders] == [("PD-1001", 4599)]
-        assert orders[0].shipping_address_line1 is None
+        assert (
+            orders[0].shipping_address_line1,
+            orders[0].shipping_address_line2,
+            orders[0].shipping_city,
+            orders[0].shipping_region,
+            orders[0].shipping_postal_code,
+            orders[0].shipping_country,
+        ) == (
+            "14 Lantern Walk",
+            "Unit 3",
+            "Port Aurora",
+            "CA",
+            "90814",
+            "US",
+        )
         assert [(refund.amount_cents, refund.status) for refund in refunds] == [(4599, "completed")]
         assert (
             session.scalars(
@@ -105,12 +119,22 @@ def test_simple_worker_persists_state_trace_and_grades(
             .where(GraderResult.case_execution_id == execution_id)
             .order_by(GraderResult.criterion)
         ).all()
-        assert {result.criterion for result in grader_results} == {
-            "refund_created",
-            "refund_amount_matches",
-            "required_tool_order",
-            "structured_final_resolution",
+        assert {result.grader_name for result in grader_results} == {
+            "state_v1",
+            "trace_v1",
+            "policy_v1",
+            "authorization_v1",
+            "escalation_v1",
+            "resolution_v1",
         }
+        assert {
+            "refunds_exact",
+            "required_order",
+            "refund_eligibility",
+            "order_access_scoped",
+            "no_unexpected_ticket",
+            "matches_persisted_state",
+        }.issubset({result.criterion for result in grader_results})
         assert all(result.passed for result in grader_results)
 
     replay = run_case_execution(str(execution_id))

@@ -21,8 +21,10 @@ from evalguard.domain.tool_schemas import (
     UpdateShippingAddressArgs,
 )
 from evalguard.domain.tools import ToolRuntime
+from evalguard.evaluation.suite import SUITE_NAME, SUITE_VERSION
 
 pytestmark = pytest.mark.integration
+PHASE3_CASE_COUNT = 25
 
 
 def test_create_experiment_returns_202_after_records_are_persisted_and_queued(
@@ -34,38 +36,58 @@ def test_create_experiment_returns_202_after_records_are_persisted_and_queued(
     del seeded_suite
     response = client.post(
         "/api/v1/experiments",
-        json={
-            "suite_name": "parceldesk-refunds",
-            "suite_version": "1.0.0",
-            "provider": "deterministic-fake",
-            "trials": 1,
-        },
+        json={"provider": "deterministic-fake", "trials": 1},
         headers={"Idempotency-Key": "integration-create-202"},
     )
 
     assert response.status_code == 202
     payload = response.json()
     experiment_id = UUID(payload["id"])
-    execution_id = UUID(payload["execution_ids"][0])
+    execution_ids = {UUID(value) for value in payload["execution_ids"]}
+    assert len(execution_ids) == PHASE3_CASE_COUNT
     assert payload["status"] == "queued"
     assert response.headers["location"] == f"/api/v1/experiments/{experiment_id}"
 
     db_session.expire_all()
     experiment = db_session.get(Experiment, experiment_id)
-    execution = db_session.get(CaseExecution, execution_id)
     assert experiment is not None
-    assert execution is not None
     assert experiment.status == "queued"
-    assert execution.experiment_id == experiment.id
-    assert execution.status == "queued"
-    assert (
-        db_session.scalars(
-            select(CaseExecution).where(CaseExecution.experiment_id == experiment.id)
-        )
-        .one()
-        .id
-        == execution_id
+    executions = db_session.scalars(
+        select(CaseExecution).where(CaseExecution.experiment_id == experiment.id)
+    ).all()
+    assert len(executions) == PHASE3_CASE_COUNT
+    assert {execution.id for execution in executions} == execution_ids
+    assert all(execution.status == "queued" for execution in executions)
+    assert set(rq_queue.job_ids) == {
+        f"case-execution-{execution_id}" for execution_id in execution_ids
+    }
+
+
+def test_explicit_phase1_suite_submission_remains_available(
+    client: TestClient,
+    seeded_legacy_suite: object,
+    db_session: Session,
+    rq_queue: Queue,
+) -> None:
+    del seeded_legacy_suite
+    response = client.post(
+        "/api/v1/experiments",
+        json={
+            "suite_name": SUITE_NAME,
+            "suite_version": SUITE_VERSION,
+            "provider": "deterministic-fake",
+            "trials": 1,
+        },
+        headers={"Idempotency-Key": "integration-explicit-phase1"},
     )
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert len(payload["execution_ids"]) == 1
+    execution_id = UUID(payload["execution_ids"][0])
+    execution = db_session.get(CaseExecution, execution_id)
+    assert execution is not None
+    assert execution.status == "queued"
     assert rq_queue.job_ids == [f"case-execution-{execution_id}"]
 
 
@@ -112,6 +134,11 @@ def test_idempotent_retry_requeues_an_enqueue_failure(
     db_session.refresh(experiment)
     original_id = experiment.id
     assert experiment.status == "enqueue_failed"
+    failed_executions = db_session.scalars(
+        select(CaseExecution).where(CaseExecution.experiment_id == experiment.id)
+    ).all()
+    assert len(failed_executions) == PHASE3_CASE_COUNT
+    assert all(execution.status == "enqueue_failed" for execution in failed_executions)
 
     monkeypatch.setattr(experiment_routes, "enqueue_execution", real_enqueue)
     retry = client.post(
@@ -130,7 +157,11 @@ def test_idempotent_retry_requeues_an_enqueue_failure(
     assert UUID(retry.json()["id"]) == original_id
     assert UUID(replay.json()["id"]) == original_id
     assert retry.json()["execution_ids"] == replay.json()["execution_ids"]
-    assert rq_queue.job_ids == [f"case-execution-{retry.json()['execution_ids'][0]}"]
+    retried_execution_ids = retry.json()["execution_ids"]
+    assert len(retried_execution_ids) == PHASE3_CASE_COUNT
+    assert set(rq_queue.job_ids) == {
+        f"case-execution-{execution_id}" for execution_id in retried_execution_ids
+    }
 
 
 def test_concurrent_idempotency_key_submissions_create_one_experiment(
@@ -155,7 +186,7 @@ def test_concurrent_idempotency_key_submissions_create_one_experiment(
             response = concurrent_client.post(
                 "/api/v1/experiments",
                 json={"provider": "deterministic-fake", "trials": 1},
-                headers={"Idempotency-Key": "concurrent-phase2-submission"},
+                headers={"Idempotency-Key": "concurrent-phase3-submission"},
             )
             return response.status_code, response.json()
 
@@ -165,10 +196,12 @@ def test_concurrent_idempotency_key_submissions_create_one_experiment(
     assert [status_code for status_code, _ in responses] == [202, 202]
     assert len({str(payload["id"]) for _, payload in responses}) == 1
     assert len({str(payload["execution_ids"]) for _, payload in responses}) == 1
-    assert len(enqueue_attempts) == 1
+    assert all(len(payload["execution_ids"]) == PHASE3_CASE_COUNT for _, payload in responses)
+    assert len(enqueue_attempts) == PHASE3_CASE_COUNT
+    assert len(set(enqueue_attempts)) == PHASE3_CASE_COUNT
     with session_factory() as session:
         assert session.scalar(select(func.count()).select_from(Experiment)) == 1
-        assert session.scalar(select(func.count()).select_from(CaseExecution)) == 1
+        assert session.scalar(select(func.count()).select_from(CaseExecution)) == PHASE3_CASE_COUNT
 
 
 def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
@@ -201,7 +234,7 @@ def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
             response = concurrent_client.post(
                 "/api/v1/experiments",
                 json={"provider": "deterministic-fake", "trials": 1},
-                headers={"Idempotency-Key": "concurrent-dispatch-retry-phase2"},
+                headers={"Idempotency-Key": "concurrent-dispatch-retry-phase3"},
             )
             return response.status_code, response.json()
 
@@ -215,12 +248,13 @@ def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
         responses = [future.result(timeout=10) for future in futures]
 
     assert sorted(status_code for status_code, _ in responses) == [202, 503]
-    assert len(enqueue_attempts) == 2
-    assert enqueue_attempts[0] == enqueue_attempts[1]
+    assert len(enqueue_attempts) == PHASE3_CASE_COUNT + 1
+    assert enqueue_attempts[0] in enqueue_attempts[1:]
+    assert len(set(enqueue_attempts)) == PHASE3_CASE_COUNT
     with session_factory() as session:
         experiment = session.scalar(
             select(Experiment).where(
-                Experiment.idempotency_key == "concurrent-dispatch-retry-phase2"
+                Experiment.idempotency_key == "concurrent-dispatch-retry-phase3"
             )
         )
         assert experiment is not None
@@ -229,8 +263,8 @@ def test_concurrent_idempotent_retry_waits_for_dispatch_outcome(
         executions = session.scalars(
             select(CaseExecution).where(CaseExecution.experiment_id == experiment.id)
         ).all()
-        assert len(executions) == 1
-        assert executions[0].status == "queued"
+        assert len(executions) == PHASE3_CASE_COUNT
+        assert all(execution.status == "queued" for execution in executions)
 
 
 def test_execution_retrieval_includes_shipping_address_and_escalation(
