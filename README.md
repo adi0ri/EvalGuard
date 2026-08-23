@@ -14,6 +14,8 @@ remaining milestone is implemented as a bounded, disabled-by-default OpenAI
 Responses path with a durable provider-turn ledger and keyless tests. Its local
 keyless acceptance gate passed. No provider credential was available, zero paid
 calls were made, and no live-model result is inferred from that acceptance.
+Implementation commit `5479c9a` and verification commit `73784c9` are published
+on `origin/main`; no new remote-CI result is claimed.
 
 The recorded deterministic-fake results are **synthetic infrastructure
 validation**. The Phase 3–5 evidence proves that the local API, queue, worker,

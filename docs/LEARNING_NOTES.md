@@ -11,7 +11,9 @@ deterministic-fake demo are locally verified and remain fake-only. The user late
 authorized a bounded keyless real-provider implementation, which now exists with
 strict adapter contracts, durable provider turns, and scripted no-network tests.
 Its keyless local gate passed. No provider credential was available, zero paid
-calls were made, and no live-model result is claimed here.
+calls were made, and no live-model result is claimed here. Implementation commit
+`5479c9a` and verification commit `73784c9` are published on `origin/main` without
+implying a remote-CI result.
 
 ## Implemented concepts through Phase 6
 

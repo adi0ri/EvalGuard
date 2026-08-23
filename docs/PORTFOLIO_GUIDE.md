@@ -164,6 +164,10 @@ cost aggregation. Its tests use scripted clients and no network. The keyless Pha
 These results prove the bounded adapter and recovery machinery locally without
 turning keyless tests into a live OpenAI result.
 
+Phase 6 implementation commit `5479c9a` and verification commit `73784c9` are
+published on `origin/main`. That publication is source availability, not evidence
+of a new remote-CI run or a credentialed OpenAI experiment.
+
 ## Reproducible demo
 
 Prerequisites are Docker Desktop with Compose and `uv`. From the repository root in

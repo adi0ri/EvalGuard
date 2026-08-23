@@ -796,4 +796,5 @@ business effects. The deterministic fake remains the CI/default provider and the
 portfolio demo remains fake-only. A future paid result requires an externally
 supplied worker credential and an explicitly observed run; until then EvalGuard
 records zero paid calls, no real model-quality result, and no measured provider
-bill.
+bill. Implementation commit `5479c9a` and verification commit `73784c9` publish
+this keyless decision outcome without claiming remote CI or a paid result.

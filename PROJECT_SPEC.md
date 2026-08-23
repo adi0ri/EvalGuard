@@ -21,6 +21,8 @@ calls were made, and no live-provider result exists. The keyless Phase 6
 implementation passed its local dependency, static, PostgreSQL, migration,
 Compose, deterministic-fake smoke, and readiness gates; the separately
 credentialed result remains blocked and is not inferred from those checks.
+Implementation commit `5479c9a` and verification commit `73784c9` are published
+on `origin/main`; no Phase 6 remote-CI result is claimed.
 
 ## Product outcome
 

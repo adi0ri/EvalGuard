@@ -319,6 +319,11 @@ kept liveness `200` while readiness changed to `503` and then recovered to `200`
 These are local implementation and synthetic-infrastructure facts, not OpenAI
 model output. The exact commands and timing are retained in `PROGRESS.md`.
 
+Implementation commit `5479c9a` and verification commit `73784c9` were published
+to `origin/main`. Local and remote refs resolved to the same full verification SHA
+at that checkpoint. This is publication provenance only; no remote-CI or provider
+result is inferred.
+
 ## Metrics integrity
 
 Never fabricate or estimate a measured result. This includes test counts, scenario
@@ -409,6 +414,6 @@ result, not evidence that the prompts are equally effective for a real model.
   and Structured Outputs references used for the adapter contract.
 - [x] Verify keyless scripted tests make no network call, no credential value is
   printed or committed, and all real-provider results remain explicitly absent.
-- [ ] Reconcile the final Phase 6 full test, migration, Compose, fake-smoke, secret
+- [x] Reconcile the final Phase 6 full test, migration, Compose, fake-smoke, secret
   scan, commit, and push results with `PROGRESS.md`.
 - [ ] Record any observed Phase 3 remote-CI result if it occurs; none is claimed.

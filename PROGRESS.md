@@ -1289,3 +1289,20 @@ gate, final rebuilt-image smoke, and reconciled durable documents. At this
 checkpoint local `main` is one commit ahead of `origin/main`, which remains at the
 published cost-free portfolio checkpoint `31a4192`. No remote-CI result is inferred.
 The next action is the user-requested push.
+
+## Phase 6 keyless implementation publication — 2026-08-23
+
+`git push origin main` succeeded and advanced `origin/main` from `31a4192` through
+implementation commit `5479c9a` to verification commit `73784c9`. Immediate
+read-only resolution returned the same full SHA for local `HEAD` and
+`origin/main`:
+
+```text
+73784c9e94df6c3dafb33ee39440facc79f40858
+```
+
+This records publication only. No remote-CI run was observed or inferred, no
+credential appeared, and no real or paid provider request was made. This durable
+publication follow-up is the final local documentation change; after it is pushed,
+the only unchecked Phase 6 result remains the externally blocked credentialed
+experiment.

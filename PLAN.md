@@ -22,7 +22,8 @@ deterministic fake remains the CI/default path and portfolio-demo results remain
 synthetic infrastructure validation.
 
 The earlier verified cost-free Phase 6 portfolio commits `5a058e0` and `31a4192`
-are published on `origin/main`. No remote-CI result is inferred. The final local
+are published on `origin/main`. Implementation commit `5479c9a` and verification
+commit `73784c9` are also published. No remote-CI result is inferred. The final local
 implementation gate passed on the keyless tree; exact dependency, static, 247-test,
 migration, Compose, fake-smoke, readiness, and audit evidence is recorded in
 `PROGRESS.md`. This does not manufacture the separately blocked paid result.
@@ -551,8 +552,8 @@ upstream FastAPI/Starlette `TestClient` deprecation warning is recorded in
 `e276ba5` and `ac7d39e` are published; and Phase 5 commits `c481ed4` and `270bbe4`
 are published. Phase 6 portfolio commits `5a058e0` and `31a4192` are also
 published. The Phase 6 keyless implementation gate is locally complete in commit
-`5479c9a`; the requested publication checkpoint remains the next action. No
-remote-CI result is claimed.
+`5479c9a` and published through verification commit `73784c9`. No remote-CI result
+is claimed.
 Phase 5 implementation and final-acceptance criteria are checked above from exact
 local evidence and recorded in implementation commit `c481ed4` plus its durable
 documentation follow-up `270bbe4`. No Phase 4 or Phase 5 remote-CI result is
@@ -560,8 +561,8 @@ claimed.
 
 ## Precise next action
 
-Publish the verified keyless implementation. After that, the only unchecked Phase
-6 outcome is the credentialed experiment. Do not invoke it unless
+The only unchecked Phase 6 outcome is the credentialed experiment. Do not invoke
+it unless
 a worker-only credential and explicit paid-run authorization become available.
 Until then, keep it visibly blocked, report zero paid calls, and do not invent a
 live result. Record remote CI only if actually observed.
