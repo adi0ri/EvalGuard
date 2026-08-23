@@ -1125,3 +1125,13 @@ not complete because the real-provider adapter and bounded experiment are still
 unchecked and unapproved. The precise next action is to ask for the separate
 approval naming one provider/model, secret-delivery method, request scope, and
 possible-spend ceiling. Do not add or call the provider before that approval.
+
+## Phase 6 local portfolio commit checkpoint — 2026-08-22
+
+Git author identity remained configured. Local commit `5a058e0`
+(`feat: complete Phase 6 portfolio track`) records the verified guide, demo, exact
+evidence, teaching notes, and durable-document updates. Local `main` is one commit
+ahead of `origin/main`, which remains at the requested Phase 5 publication commit
+`270bbe4`. The Phase 6 commit is intentionally unpushed, and no remote-CI result is
+claimed. The separately approved real-provider track remains the next unchecked
+work.

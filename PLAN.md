@@ -22,7 +22,9 @@ completed two new 75-execution arms with 75/75 passing in each and 1,521/1,521
 criteria per arm; comparison/report retrieval passed with 150 raw links; the full
 199-test suite passed in 187.64 seconds; locked sync, Ruff, formatting, mypy,
 Compose configuration, image build, and package-content checks passed. Exact IDs
-and raw counts are in `PROGRESS.md`.
+and raw counts are in `PROGRESS.md`. Local commit `5a058e0` records this verified
+cost-free slice and remains unpushed; `origin/main` remains at requested Phase 5
+publication commit `270bbe4`.
 
 Phase 4 remains complete with implementation commit `e276ba5` and documentation
 commit `ac7d39e` published on `origin/main`. Earlier Phase 3 commits `083808c` and

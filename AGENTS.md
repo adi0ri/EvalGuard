@@ -60,10 +60,11 @@ ParcelDesk support domain.
 - The user explicitly advanced Phase 6 on 2026-08-22. Its cost-free portfolio
   documentation and reproducible deterministic-fake demo are locally verified.
   The demo completed two new 75-execution arms, the full 199-test suite passed, and
-  exact results are recorded in `PROGRESS.md`. Do not add or invoke a real-provider
-  adapter, read or use provider credentials, or incur possible spending until the
-  user gives the separate explicit approval required by the original product
-  contract. Phase 6 authorization by itself is not that approval.
+  exact results are recorded in `PROGRESS.md`. Local commit `5a058e0` records that
+  cost-free slice and remains unpushed. Do not add or invoke a real-provider adapter,
+  read or use provider credentials, or incur possible spending until the user gives
+  the separate explicit approval required by the original product contract. Phase 6
+  authorization by itself is not that approval.
 
 ## Engineering rules
 

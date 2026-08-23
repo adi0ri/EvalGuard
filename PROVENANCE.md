@@ -363,4 +363,6 @@ result, not evidence that the prompts are equally effective for a real model.
   through implementation commit `c481ed4` and documentation commit `270bbe4`.
 - [x] Verify the Phase 6 deterministic-fake demo and reconcile its exact result
   with the portfolio guide without adding a real provider or credential.
+- [x] Record local Phase 6 cost-free portfolio commit `5a058e0` and distinguish it
+  from published `origin/main` at `270bbe4`.
 - [ ] Record any observed Phase 3 remote-CI result if it occurs; none is claimed.
