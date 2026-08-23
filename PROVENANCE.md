@@ -40,6 +40,12 @@ support workflow. Agent prompts are versioned separately from the already
 published fictional customer-request cases, whose content and hashes remain
 unchanged.
 
+Phase 6's cost-free portfolio guide, architecture diagram, demo narration,
+limitations, interview stories, and PowerShell demo script were independently
+authored from EvalGuard's committed implementation and recorded evidence. They add
+no domain case, dataset, prompt, provider output, benchmark, or external report
+template. The script selects only the in-repository deterministic fake.
+
 No proprietary material from any employer or other private source was used. This
 project must not copy, reconstruct, imitate, or include employer code, prompts,
 policies, task wording, scenarios, graders, traces, labels, datasets, architecture,
@@ -253,16 +259,30 @@ executions and the same scoped 150/150/3,042/264/984/42/30 evidence counts. Its 
 completion markers declared exactly 3,042 criteria, matching the 3,042 grader rows.
 This remains synthetic infrastructure validation, not a quality measurement.
 
+Phase 5 implementation commit `c481ed4` and documentation commit `270bbe4` were
+subsequently pushed as requested; `origin/main` advanced to `270bbe4`. This is
+publication evidence only. No Phase 5 remote-CI result is claimed.
+
+The Phase 6 portfolio demo also used only `deterministic-fake`. Experiments
+`a3675de7-2ee0-47ec-b17d-c354c7d87d02` and
+`8f6cfffd-9532-46a8-98dc-23ed30b22ba6` completed two new 75-execution arms. Each
+passed 1,521/1,521 deterministic criteria; the report exposed 150 raw links and
+the scoped database counts matched the recorded 150/150/150/3,042/264/984/42/30
+execution/attempt/dispatch/grader/tool/trace/refund/ticket evidence. Token and cost
+availability remained false. This validates the portfolio demo path, not a model.
+
 ### Future real provider
 
-A single optional real-provider adapter and experiment are Phase 6 only. They may
-be added and run only after explicit approval to use credentials and potentially
-incur cost. Any later real result must identify the provider/model, relevant
-configuration, suite/case versions and hashes, run date, trial count, raw result
-location, exact reproducible command, and measured token/cost/latency source. It
-must be reported separately from fake-provider validation.
+A single optional real-provider adapter and experiment are the separately gated
+Phase 6 track. They may be added and run only after explicit approval to use
+credentials and potentially incur cost. Starting the cost-free Phase 6 portfolio
+track is not that approval. Any later real result must identify the provider/model,
+relevant configuration, suite/case versions and hashes, run date, trial count, raw
+result location, exact reproducible command, and measured token/cost/latency
+source. It must be reported separately from fake-provider validation.
 
-No real provider or paid API was invoked for Phase 0–5.
+No real provider or paid API was invoked for Phase 0–5 or the current cost-free
+Phase 6 work.
 
 ## Metrics integrity
 
@@ -339,4 +359,8 @@ result, not evidence that the prompts are equally effective for a real model.
   name scans.
 - [x] Record verified Phase 5 implementation commit `c481ed4`; keep it local and
   distinguish that checkpoint from published `origin/main` at `ac7d39e`.
+- [x] Record successful Phase 5 publication: `origin/main` advanced to `270bbe4`
+  through implementation commit `c481ed4` and documentation commit `270bbe4`.
+- [x] Verify the Phase 6 deterministic-fake demo and reconcile its exact result
+  with the portfolio guide without adding a real provider or credential.
 - [ ] Record any observed Phase 3 remote-CI result if it occurs; none is claimed.

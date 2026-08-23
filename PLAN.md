@@ -4,21 +4,25 @@ Last updated: 2026-08-22
 
 ## Current milestone
 
-**Phase 5 — implementation and local acceptance complete.** Two immutable,
-separately hashed agent prompts are now selectable independently of each immutable
-case request. Experiments persist one prompt identity and one-to-three trials;
-summary/comparison APIs derive explicit-denominator correctness, grader, category,
-stability, attempt, and synthetic infrastructure timing metrics from raw rows. A
-small Jinja2 report uses the same comparison function and links every raw execution.
-The verified prompt-v1 and prompt-v2 arms each contain 25 cases × three trials = 75
-executions, for 150 raw executions total. The post-review full suite passed all 199
-tests in 415.56 seconds, revision `20260822_0008` completed a clean migration round trip,
-the rebuilt Compose topology passed, and the independent live comparison completed
-150/150 executions with 3,042/3,042 passing criteria. Exact evidence is in
-`PROGRESS.md`. Implementation commit `c481ed4` records the verified Phase 5 tree,
-which remains local/unpushed;
-`origin/main` is the published Phase 4 documentation commit `ac7d39e`. No Phase 4
-or Phase 5 remote-CI result is claimed.
+**Phase 6 — cost-free portfolio track complete; real-provider track gated.**
+The user explicitly advanced the milestone and requested publication of Phase 5.
+Implementation commit `c481ed4` and documentation commit `270bbe4` are now
+published on `origin/main`. No Phase 5 remote-CI result is claimed. The active,
+authorized work is a portfolio guide and repeatable deterministic-fake PowerShell
+demo that preserve every Phase 5 evidence label and limitation.
+
+The original contract separately requires explicit approval for credentials and
+possible spending before one real-provider adapter is added or invoked. That
+second approval has not been given. No provider/model, credential, request budget,
+or monetary cap is therefore selected or used, and the real-provider experiment is
+not yet authorized.
+
+The cost-free track is locally verified. The PowerShell parser passed; the demo
+completed two new 75-execution arms with 75/75 passing in each and 1,521/1,521
+criteria per arm; comparison/report retrieval passed with 150 raw links; the full
+199-test suite passed in 187.64 seconds; locked sync, Ruff, formatting, mypy,
+Compose configuration, image build, and package-content checks passed. Exact IDs
+and raw counts are in `PROGRESS.md`.
 
 Phase 4 remains complete with implementation commit `e276ba5` and documentation
 commit `ac7d39e` published on `origin/main`. Earlier Phase 3 commits `083808c` and
@@ -464,14 +468,25 @@ queued deterministic breadth without mutating that historical definition.
   boundary. Record the initial duplicate-template packaging failure and verified
   correction.
 
-## Backlog — do not implement during the current milestone
+## Phase 6 — optional real provider and portfolio finish
 
-### Phase 6: optional real provider and portfolio finish
-
-- [ ] After explicit approval for credentials and spending, add one real-provider
-  adapter and run the real experiment.
-- [ ] Finish architecture, methodology, limitations, demo, and portfolio
-  documentation.
+- [x] Receive explicit direction to begin Phase 6.
+- [x] Push verified Phase 5 commits `c481ed4` and `270bbe4`; confirm local `HEAD`
+  and `origin/main` both resolve to `270bbe4` without claiming remote CI.
+- [x] Finish and review architecture, methodology, limitations, evidence, demo,
+  and interview-facing portfolio documentation.
+- [x] Exercise the deterministic-fake PowerShell demo end to end and record its
+  exact results without presenting them as model quality.
+- [x] Rerun proportionate static, automated, packaging, and live checks for the
+  Phase 6 documentation/demo slice.
+- [ ] Receive separate explicit approval naming one provider/model, credential
+  handling, request scope, and possible-spend ceiling.
+- [ ] After that approval only, introduce shorter durable provider/tool steps and
+  explicit resume semantics; add one real-provider adapter without weakening the
+  deterministic fake or CI.
+- [ ] Run one bounded real experiment and record provider/model, configuration,
+  revision, hashes, raw evidence, measured usage/cost sources, and limitations
+  separately from synthetic infrastructure validation.
 
 ## Risks and mitigations
 
@@ -496,14 +511,16 @@ No Phase 0–5 local-acceptance blocker is known. One
 upstream FastAPI/Starlette `TestClient` deprecation warning is recorded in
 `PROGRESS.md`; the final Phase 5 suite passes all 199 tests. Phase 2 is published at
 `26c3e86`; Phase 3 commits `083808c` and `6655e79` are published; Phase 4 commits
-`e276ba5` and `ac7d39e` are published; and `origin/main` remains at `ac7d39e`.
+`e276ba5` and `ac7d39e` are published; and Phase 5 commits `c481ed4` and `270bbe4`
+are published with `origin/main` at `270bbe4`.
 Phase 5 implementation and final-acceptance criteria are checked above from exact
 local evidence and recorded in implementation commit `c481ed4` plus its durable
-documentation follow-up. Both remain unpushed. No Phase 4 or
-Phase 5 remote-CI result is claimed.
+documentation follow-up `270bbe4`. No Phase 4 or Phase 5 remote-CI result is
+claimed.
 
 ## Precise next action
 
-Wait for explicit user direction. Do not push Phase 5 or begin Phase 6 without new
-direction. A real-provider adapter still requires separate explicit approval for
-credentials and possible spending. Record remote CI only if actually observed.
+Request the contract's separate explicit approval before selecting, adding, or
+invoking one real provider. That approval must name one provider/model, secret-
+delivery method, bounded request scope, and possible-spend ceiling. Record remote
+CI only if actually observed.

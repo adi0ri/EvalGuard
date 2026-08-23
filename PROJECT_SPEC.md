@@ -9,10 +9,12 @@ immutable versioned agent prompts, one-to-three-trial experiments, deterministic
 aggregate summaries/comparisons, and a small server-rendered report. Its final 199
 tests, clean migration round trip, rebuilt clean Compose topology, live 150-execution
 prompt comparison, idempotent replay, and Redis readiness outage/restoration probe
-passed locally. Implementation commit `c481ed4` records Phase 5 locally; it remains
-unpushed and no
-remote-CI result is claimed. Phase 6 remains out of scope without new explicit
-direction and separate approval for credentials and possible spending.
+passed locally. Implementation commit `c481ed4` and documentation commit `270bbe4`
+are published on `origin/main`; no Phase 5 remote-CI result is claimed. The user
+advanced Phase 6 on 2026-08-22. The cost-free portfolio guide and deterministic-fake
+demo are locally verified, while the real-provider adapter and experiment remain
+blocked on the contract's separate explicit approval for credentials and possible
+spending.
 
 ## Product outcome
 
@@ -272,6 +274,19 @@ report plumbing; they do not establish that either prompt is better.
   autoescaping and inline CSS only, labels results synthetic infrastructure
   validation, shows prompt/suite hashes and limitations, and links all 150 raw
   execution endpoints. There is no React, JavaScript application, or real model.
+
+### Phase 6: portfolio finish and separately approved real-provider experiment
+
+- The cost-free track consolidates architecture, methodology, limitations,
+  evidence, a code tour, interview narratives, and a repeatable PowerShell demo.
+- The demo remains pinned to the deterministic fake until a separate approval names
+  one provider/model, credential handling, and a bounded request/cost scope.
+- A real network adapter cannot be inserted into the current long deterministic
+  transaction. The approved implementation must introduce shorter durable
+  provider/tool steps and explicit resume semantics before making a network call.
+- Real-provider evidence must be stored and reported separately with provider/model,
+  code revision, suite/prompt hashes, trial count, raw evidence, measured usage and
+  cost sources, and limitations. It must never be blended with synthetic results.
 
 ## Target V1 domain contract
 
@@ -663,16 +678,17 @@ tests, Compose build/startup, repeated prompt/suite seeding, live health/readine
 the exact two-prompt × 25-case × three-trial run, raw evidence counts, report, and
 idempotent replay passed. A Redis-down probe retained liveness `200`, changed
 readiness to `503`, and restored readiness to `200`. All results are synthetic
-infrastructure validation. No real provider, token/cost measurement, push, or
-remote-CI result is inferred. Implementation commit `c481ed4` records this
-verified state locally.
+infrastructure validation. At local acceptance, no real provider, token/cost
+measurement, push, or remote-CI result was inferred. Implementation commit
+`c481ed4` records that verified state; it was later published with documentation
+commit `270bbe4`. No Phase 5 remote-CI result is claimed.
 
 ## Full V1 definition of done
 
 The deterministic V1 foundation through Phase 5 is complete: four typed tools, 25
 immutable cases, two immutable agent prompts, three trials per prompt/case, 150 raw
 reproducible executions, deterministic summaries/comparison, and a small server-
-rendered report. The optional Phase 6 real-provider adapter and real run occur only
-after explicit approval. Any later portfolio finish must preserve architecture,
-methodology, limitations, demo steps, provenance, and the precise source of every
-reported number.
+rendered report. The cost-free Phase 6 portfolio finish is locally verified and
+preserves architecture, methodology, limitations, demo steps, provenance, and the
+precise source of every reported number. The optional Phase 6 real-provider adapter
+and real run occur only after separate explicit approval.

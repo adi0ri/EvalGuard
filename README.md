@@ -6,16 +6,20 @@ wholly fictional ParcelDesk support domain. Phases 0–4 provide an immutable
 durable PostgreSQL/RQ dispatch, bounded attempts, recovery, and fault controls.
 Phase 5 adds independently versioned agent prompts, one-to-three trials per case,
 transparent aggregate summaries, strict experiment compatibility checks, and a
-small server-rendered comparison report. Phase 4 was pushed as requested;
-`origin/main` is at `ac7d39e`. Phase 5 is locally implemented and verified but is
-recorded in implementation commit `c481ed4`, not yet pushed, and no new remote-CI
-result is claimed.
+small server-rendered comparison report. Verified Phase 5 implementation commit
+`c481ed4` and documentation commit `270bbe4` are published on `origin/main`; no new
+remote-CI result is claimed. Phase 6's cost-free portfolio guide and
+deterministic-fake demo are locally verified. Its optional real-provider track
+still requires a separate explicit approval for credentials and possible spending.
 
 The recorded deterministic-fake results are **synthetic infrastructure
 validation**. The Phase 3–5 evidence proves that the local API, queue, worker,
 tools, transaction, trace, grader, recovery, aggregate, and report paths worked
 together; it is not evidence of prompt/model quality, model latency, token usage,
 or cost.
+
+For a concise architecture, methodology, evidence, limitations, code tour, and
+interview walkthrough, see [`docs/PORTFOLIO_GUIDE.md`](docs/PORTFOLIO_GUIDE.md).
 
 ## Implemented now
 
@@ -422,6 +426,21 @@ preserved all identifiers. With Redis stopped, liveness remained `200`, readines
 became `503`, and readiness returned to `200` after restoration. These are
 synthetic infrastructure results, not prompt/model quality or model latency.
 
+## Portfolio demo
+
+After Compose is ready and `evalguard.cli seed` has run, this PowerShell command
+submits the two deterministic three-trial prompt arms, waits for all 150 executions,
+checks their summaries/comparison/report, and prints both experiment IDs plus the
+report URL:
+
+```powershell
+.\scripts\demo.ps1
+```
+
+The script is deliberately restricted to `deterministic-fake`; it cannot use a
+provider credential or incur model cost. See the portfolio guide for the suggested
+ten-minute walkthrough and the exact claims the run can support.
+
 ## API implemented through Phase 5
 
 | Method | Path | Purpose |
@@ -448,12 +467,16 @@ semantic convergence, and PostgreSQL uniqueness make partial or duplicate dispat
 converge. The API's initial-work override applies only to queued/legacy
 `enqueue_failed` executions; `retrying` work remains `available_at` gated.
 
-## Planned, not implemented
+## Phase 6 status
 
-A single real-provider adapter and one controlled experiment are optional Phase 6
-work. Phase 6 has not started and requires separate explicit approval for
-credentials and possible spending. Manual retry-failures and token/cost accounting
-also remain deferred.
+The cost-free portfolio documentation and deterministic-fake demo are implemented
+and locally verified.
+
+A single real-provider adapter and one controlled experiment remain gated on
+separate explicit approval for credentials and possible spending. A correct network
+integration must replace the fake path's long database transaction with shorter
+durable provider/tool steps and explicit resume semantics before any call is made.
+Manual retry-failures and real token/cost accounting also remain deferred.
 
 There is currently no real model, client-side application, manual retry API,
 token/cost data, or claim of prompt/model performance.
@@ -465,5 +488,7 @@ token/cost data, or claim of prompt/model performance.
 - `PROGRESS.md` — commands actually run, exact results, warnings, and next action
 - `DECISIONS.md` — architectural choices and tradeoffs
 - `docs/LEARNING_NOTES.md` — interview-ready explanations of the implemented ideas
+- `docs/PORTFOLIO_GUIDE.md` — architecture, methodology, evidence, limitations,
+  demo, code tour, and portfolio narrative
 - `PROVENANCE.md` — independent origin, public dependencies/references, and result
   labeling rules

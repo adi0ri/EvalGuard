@@ -994,3 +994,134 @@ is intentionally unpushed and no Phase 5 remote-CI result is claimed. This
 follow-up durable-document update records that exact checkpoint. The next action is
 to wait for explicit user direction before any Phase 5 push or Phase 6 work; a real
 provider still requires separate credentials/cost approval.
+
+## Phase 5 publication and Phase 6 authorization — 2026-08-22
+
+The user explicitly requested Phase 5 publication and the start of Phase 6. The
+push completed successfully. A post-push read-only check returned the same full
+commit for local `HEAD` and `origin/main`:
+
+```text
+270bbe453245e2ac52c93e29e62d2d041c03af50
+```
+
+The published tip is documentation commit `270bbe4`, immediately after Phase 5
+implementation commit `c481ed4`. This verifies publication only; no Phase 5 remote-
+CI result was observed or claimed.
+
+The original product contract requires a second explicit approval before adding or
+invoking one real provider, using a credential, or possibly spending money. The
+user advanced the milestone but did not give that separate approval. Phase 6
+therefore began with its cost-free portfolio track only. No provider/model, SDK,
+API-key setting, request budget, price, or paid call was added or used.
+
+## Phase 6 cost-free portfolio implementation — 2026-08-22
+
+- `docs/PORTFOLIO_GUIDE.md` now provides the 60-second project story, architecture
+  diagram, experiment methodology, exact Phase 5 evidence, reproducible demo, code
+  tour, limitations, interview design stories, and the separate real-provider
+  approval/result-record contract.
+- `scripts/demo.ps1` is a PowerShell-native deterministic-fake walkthrough. It
+  verifies readiness and seeded v2 inputs, submits prompt v1 and v2 with three
+  trials, waits for both 75-execution arms, retrieves both summaries and the
+  comparison, checks the HTML report, and prints its synthetic limitation. Its
+  provider field is fixed to `deterministic-fake`.
+- `DECISIONS.md` records that a real network adapter cannot safely be inserted into
+  the current long deterministic transaction. A later approved implementation
+  needs durable provider turns, network I/O outside database transactions, claim
+  revalidation, persisted responses before tool effects, and explicit resume
+  semantics.
+- Every durable document was updated to distinguish the locally verified cost-free
+  track from the still-unapproved real-provider track.
+
+## Phase 6 demo and final gates — 2026-08-22
+
+The PowerShell parser reported `PowerShell parser: passed`. The exact live command
+was:
+
+```powershell
+.\scripts\demo.ps1 -BaseUrl 'http://localhost:58000' `
+  -RunId 'phase6docs20260822' -PollIntervalSeconds 1 -TimeoutSeconds 900
+```
+
+It exited 0 against the clean isolated `evalguard-phase5-closure` packaged stack
+and produced:
+
+- baseline experiment `a3675de7-2ee0-47ec-b17d-c354c7d87d02`;
+- candidate experiment `8f6cfffd-9532-46a8-98dc-23ed30b22ba6`;
+- 75 expected and 75 passing executions in each arm;
+- 1,521/1,521 passing criteria in each arm;
+- valid grids, a ready comparison, report status `200`, and exactly 150 raw links;
+- token usage unavailable and cost unavailable; and
+- scoped PostgreSQL counts of 150 executions, 150 attempts, 150 dispatches, 3,042
+  grader rows, 264 tool invocations, 984 trace events, 42 refunds, and 30 tickets.
+
+After suppressing PowerShell's progress UI for a clean demo, the final script was
+parsed again and replayed with the same `RunId`. It returned the same two experiment
+IDs and the scoped execution/attempt/dispatch counts remained 150/150/150, proving
+the demo's same-key replay did not repeat provider/tool work.
+
+This is **synthetic infrastructure validation**, not prompt/model quality, model
+latency, token, or cost evidence.
+
+The final current-tree commands produced these exact results:
+
+| Command | Exact observed result |
+| --- | --- |
+| `uv sync --frozen --all-groups` | Succeeded: `Checked 50 packages in 10ms`. |
+| PowerShell parser over `scripts/demo.ps1` | Passed with zero parse errors. |
+| `uv run ruff check .` | Succeeded: `All checks passed!`. |
+| `uv run ruff format --check .` | Succeeded: `75 files already formatted`. |
+| `uv run mypy` | Succeeded: no issues found in 34 source files. |
+| `uv run pytest` | `199 passed, 1 warning in 187.64s (0:03:07)`. |
+| `docker compose config --quiet` | Exited 0 with no output. |
+| `uv run alembic current` | Reported `20260822_0008 (head)`. |
+| `uv run alembic check` | Reported `No new upgrade operations detected.` |
+| `docker compose build migrate test-db api worker` | Exited 0; the non-editable `evalguard:local` image built successfully. |
+| `git diff --check` | Exited 0; only expected LF-to-CRLF working-copy warnings were printed. |
+
+The pytest warning is the unchanged dependency-originated FastAPI/Starlette
+`TestClient` warning. No test was skipped, weakened, or replaced with SQLite. A
+container inspection confirmed the rebuilt image contains the portfolio guide,
+PowerShell demo, and installed Jinja2 comparison template:
+
+```powershell
+docker run --rm --entrypoint python evalguard:local -c `
+  "from pathlib import Path; paths=['/app/docs/PORTFOLIO_GUIDE.md','/app/scripts/demo.ps1','/app/.venv/lib/python3.12/site-packages/evalguard/api/templates/comparison.html']; print({path: Path(path).is_file() for path in paths})"
+```
+
+All three paths returned `True`. The final artifact hash check was:
+
+```powershell
+Get-FileHash -Algorithm SHA256 -LiteralPath `
+  'docs/PORTFOLIO_GUIDE.md','scripts/demo.ps1'
+docker run --rm --entrypoint sha256sum evalguard:local `
+  /app/docs/PORTFOLIO_GUIDE.md /app/scripts/demo.ps1 `
+  /app/.venv/lib/python3.12/site-packages/evalguard/api/templates/comparison.html
+```
+
+The final host/image hashes matched at
+`23e2f1d27aa1d19cb8dc55c22be91e1ef01b32bac83b79864a3cba9759b4a929`
+for the guide and
+`f46cc83be53d10da54770e2ed8b483653b283284df5fe960c5cf6548a073c71f`
+for the demo; the installed comparison template was also present.
+
+The exact high-confidence secret scan was:
+
+```powershell
+$matches = rg -l --hidden --glob '!.git/**' --glob '!uv.lock' `
+  '(-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,})' .
+```
+
+It returned zero matching files.
+
+An independent read-only final review then checked factual claims, the PowerShell
+flow and idempotency-key length, stale status language, and the approval boundary.
+After correcting the distinction between fixture materialization and conditional
+refund/ticket effects, it reported no remaining blocker.
+
+The cost-free Phase 6 portfolio track is locally complete. Phase 6 as a whole is
+not complete because the real-provider adapter and bounded experiment are still
+unchecked and unapproved. The precise next action is to ask for the separate
+approval naming one provider/model, secret-delivery method, request scope, and
+possible-spend ceiling. Do not add or call the provider before that approval.

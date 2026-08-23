@@ -1,14 +1,14 @@
 # EvalGuard Learning Notes
 
 These notes explain the architecture in interview-ready language. Phase 0–5 result
-counts below come from recorded automated and live synthetic evidence. Phase 4 was
-pushed as requested, and `origin/main` is at `ac7d39e`; no new remote-CI result is
-claimed. Phase 5 prompt/trial analysis and reporting are locally implemented and
-verified in implementation commit `c481ed4`, which remains unpushed. Every Phase 5
-comparison is **synthetic infrastructure validation**:
+counts below come from recorded automated and live synthetic evidence. Verified
+Phase 5 commits `c481ed4` and `270bbe4` are published on `origin/main`; no new
+remote-CI result is claimed. Every Phase 5 comparison is **synthetic infrastructure
+validation**:
 the fake deliberately ignores prompt wording, so it does not measure prompt/model
-quality, model latency, tokens, or cost. Phase 6 real-provider work has not started
-and still requires separate explicit approval.
+quality, model latency, tokens, or cost. Phase 6's cost-free portfolio guide and
+deterministic-fake demo are locally verified. Real-provider work still requires the
+contract's separate explicit approval for credentials and possible spending.
 
 ## Implemented concepts through Phase 5
 
@@ -876,6 +876,43 @@ actual worker SIGKILL, and Redis-outage recovery are recorded in `PROGRESS.md`.
 - **Interview explanation:** “The report is a view over the same evidence contract,
   not another analytics system.”
 
+## Phase 6 boundary concepts
+
+### Network calls require shorter durable steps
+
+- **Problem it solves:** The deterministic fake is local and fast, but a real model
+  request can be slow, time out after the provider accepted it, or return tool calls
+  over several turns. Holding a database transaction and execution-row lock during
+  that network wait wastes scarce connections and makes crash recovery ambiguous.
+- **How it works in EvalGuard today:** `execute_case` intentionally keeps fixture
+  creation, fake-provider work, tools, grading, and completion in one transaction.
+  Phase 4 can retry the whole rolled-back deterministic attempt. Phase 6 has not
+  inserted a network adapter into that slot. The approved design must instead
+  persist a prepared provider turn, commit, perform the network request with no
+  database transaction open, persist the response and measured usage after
+  rechecking the claim fence, execute each persisted tool request in a short local
+  transaction, and repeat until a final resolution can be graded.
+- **Why this approach:** Durable turns make resume decisions evidence-based and
+  keep network latency outside database locks. Persisting the provider response
+  before tool execution also gives retries a stable tool-call identity to replay.
+- **Alternative and tradeoff:** Calling a model inside the current transaction is
+  less code, but ties up a connection and cannot prove whether a timed-out request
+  incurred cost. Retrying an unknown provider outcome can multiply spend even when
+  database side effects roll back.
+- **Common failure modes:** Treating a client timeout as proof the provider did no
+  work, retrying a billable request without an idempotency guarantee, storing a tool
+  effect before its provider call is durable, losing the claim fence between turns,
+  logging credentials or unrestricted response data, and confusing provider
+  latency with worker duration.
+- **Interview explanation:** “Local atomicity is right for the deterministic fake,
+  but a network boundary needs a durable state machine: commit intent, call outside
+  the transaction, persist the response, then execute idempotent tools.”
+
+The separate approval gate is also an engineering control. It must name one
+provider/model, secret-delivery method, request scope, and cost ceiling before code
+uses credentials or makes a call. The portfolio guide records the current evidence
+and limitation without turning missing real-provider data into a fabricated result.
+
 ## Interview questions to practice
 
 1. Why does experiment creation return 202 rather than waiting for the agent?
@@ -940,3 +977,7 @@ actual worker SIGKILL, and Redis-outage recovery are recorded in `PROGRESS.md`.
 39. Why do the JSON comparison and HTML report share one analysis function?
 40. What does the deterministic fake's zero prompt delta prove, and what does it
     explicitly not prove?
+41. Why can a real-provider adapter not simply replace the fake inside the current
+    execution transaction?
+42. Which facts must be durable before and after each network provider turn so a
+    worker can resume without repeating an unknown or billable outcome?

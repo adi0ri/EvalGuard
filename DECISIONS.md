@@ -699,5 +699,42 @@ real provider, or model-quality claims. Those require later scope, and Phase 6
 still requires separate user approval for credentials and possible cost.
 
 Local implementation commit `c481ed4` records the verified Phase 5 decisions and
-behavior. It remains unpushed; `origin/main` remains at published Phase 4 commit
-`ac7d39e`, and no Phase 5 remote-CI result is claimed.
+behavior. At that checkpoint it remained unpushed and `origin/main` remained at
+published Phase 4 commit `ac7d39e`; D026 records the later publication boundary.
+No Phase 5 remote-CI result is claimed.
+
+## 2026-08-22 — D026: Split Phase 6 portfolio work from the real-provider approval gate
+
+**Status:** Accepted for the Phase 6 start; the real-provider implementation and
+run remain unapproved.
+
+Phase 5 commits `c481ed4` and `270bbe4` were published before this decision; no
+Phase 5 remote-CI result is inferred from that push.
+
+**Reason:** The portfolio architecture, methodology, limitations, code tour, and
+deterministic demo can be completed without a credential or cost. The original
+contract independently requires approval before adding or invoking one real
+provider. The existing `execute_case` function also holds one transaction and
+execution lock across its local fake-provider/tool/grader path, which is not a safe
+boundary for a slow or ambiguous network request.
+
+**Alternatives:** Treating “start Phase 6” as permission to select a provider and
+spend would erase the contract's separate approval condition. Pausing all Phase 6
+work would leave useful cost-free portfolio work undone. Plugging a network client
+into `DeterministicFakeProvider`'s slot would be smaller initially, but would hold a
+database connection and locks during network latency and could repeat an unknown
+billable outcome after a timeout.
+
+**Consequences:** Phase 6 starts with an evidence-centered portfolio guide and a
+PowerShell demo hard-coded to `deterministic-fake`. No SDK, API-key setting, model,
+credential, or network call is added. Before the real-provider track can start, the
+user must separately approve one provider/model, secret delivery, bounded request
+scope, and possible-spend ceiling.
+
+The later approved implementation must use shorter durable turns: persist and
+commit provider intent, make the network request without an open database
+transaction, revalidate the execution claim before persisting the response and
+measured usage, run persisted tool calls in short transactions, and repeat until a
+final resolution can be graded. Real results must remain separate from synthetic
+infrastructure evidence. This decision defines the safety boundary; it does not
+claim that the durable real-provider state machine exists yet.

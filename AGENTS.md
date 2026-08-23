@@ -54,11 +54,16 @@ ParcelDesk support domain.
   fresh final-tree 150-execution comparison, and readiness outage/restoration probe
   are recorded in `PROGRESS.md`. These fake-provider
   results are synthetic infrastructure validation, not prompt/model quality.
-  Implementation commit `c481ed4` records the verified milestone locally. Phase 5
-  remains unpushed; `origin/main` remains the published Phase 4 commit `ac7d39e`.
-- Do not begin Phase 6 unless the user explicitly advances the milestone and
-  separately approves any credentials and possible spending. No real provider or
-  paid API is authorized by Phase 5.
+  Implementation commit `c481ed4` and documentation commit `270bbe4` record the
+  verified milestone and are published on `origin/main`. No Phase 5 remote-CI
+  result is claimed.
+- The user explicitly advanced Phase 6 on 2026-08-22. Its cost-free portfolio
+  documentation and reproducible deterministic-fake demo are locally verified.
+  The demo completed two new 75-execution arms, the full 199-test suite passed, and
+  exact results are recorded in `PROGRESS.md`. Do not add or invoke a real-provider
+  adapter, read or use provider credentials, or incur possible spending until the
+  user gives the separate explicit approval required by the original product
+  contract. Phase 6 authorization by itself is not that approval.
 
 ## Engineering rules
 
@@ -241,6 +246,15 @@ whose changes could affect them:
     75-execution arms, three trials for each of 25 cases, 150 distinct raw
     executions, prompt identity in every provider-request trace, summary/comparison
     retrieval, a 150-link HTML report, and compatible idempotent replay.
+26. Phase 5 publication verification showing local `HEAD` and `origin/main` at the
+    same exact commit, without inferring a remote-CI result from the push.
+27. The Phase 6 cost-free portfolio demo must be syntax-checked and exercised
+    against the packaged application; its exact result and synthetic limitation
+    must be recorded before that documentation slice is called complete.
+28. Any later real-provider implementation must retain credential-free CI, add
+    deterministic adapter/state-machine tests without paid calls, verify network
+    waits occur outside database transactions, and run a paid/credentialed smoke
+    only inside the separately approved provider/model and cost boundary.
 
 Do not claim the milestone is complete while any acceptance item in `PLAN.md` is
 unchecked or unverified.
