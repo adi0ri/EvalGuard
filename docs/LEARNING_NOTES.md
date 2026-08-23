@@ -2,9 +2,10 @@
 
 These notes explain the architecture in interview-ready language. Sections marked
 **Phase 0/1/2 and Phase 3 implementation** describe behavior exercised by the final
-automated suite and the live 25-case synthetic smoke. Phase 3 remains uncommitted
-and unpushed, and no Phase 3 remote-CI result is claimed. Sections marked **Future
-hardening** describe constraints the current design must leave room for; they are
+automated suite and the live 25-case synthetic smoke. Phase 3 is locally committed
+at `083808c`; it is not pushed, and no Phase 3 remote-CI result is claimed.
+Sections marked **Future hardening** describe constraints the current design must
+leave room for; they are
 not claims that the later behavior has been implemented.
 
 ## Phase 0–3 concepts

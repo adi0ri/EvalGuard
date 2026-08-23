@@ -5,9 +5,10 @@
 Phase 0, Phase 1, and Phase 2 are complete. Phase 3 implementation and local
 acceptance are complete: 158 tests, locked installation, static checks, the clean
 `20260822_0006` migration round trip, Compose startup, a live 25-case smoke, and a
-Redis-unavailable readiness probe passed. Phase 3 remains uncommitted and unpushed,
-and no Phase 3 remote-CI result is claimed. This specification defines the
-implemented Phase 3 breadth and the remaining V1 contract. Phase 4 and later
+Redis-unavailable readiness probe passed. Phase 3 is locally committed at
+`083808c`; it is not pushed, and no Phase 3 remote-CI result is claimed. This
+specification defines the implemented Phase 3 breadth and the remaining V1
+contract. Phase 4 and later
 requirements are constraints to preserve, not authorization to implement them now.
 
 ## Product outcome

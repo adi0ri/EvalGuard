@@ -4,15 +4,15 @@ Last updated: 2026-08-22
 
 ## Current milestone
 
-**Phase 3 — implementation and local acceptance complete; repository closure in
-progress.** The immutable 25-case v2 suite, actor-scoped tools, six deterministic
+**Phase 3 — complete locally.** The immutable 25-case v2 suite, actor-scoped tools, six deterministic
 grader families, eleven fake behavior IDs, aggregate experiment lifecycle, explicit
 replay evidence, and relational ticket/order owner enforcement are implemented. The
 full PostgreSQL/Redis-backed run passes all 158 tests, and locked installation,
 static checks, the `20260822_0006` migration round trip, Compose startup, idempotent
 live seeding, the live 25-case smoke, and the Redis-unavailable readiness probe have
-passed. Documentation/secret reconciliation, a local Phase 3 commit, push, and any
-observed remote CI remain unchecked below. Phase 4 and later remain backlog only.
+passed. Documentation/secret reconciliation and local commit `083808c` are complete.
+Phase 3 is not pushed and no remote CI result is claimed; neither is a local
+acceptance prerequisite. Phase 4 and later remain backlog only.
 
 ## Phase 0 — repository and architecture foundation
 
@@ -287,8 +287,8 @@ queued deterministic breadth without mutating that historical definition.
   returned `503` with Redis unavailable, and readiness returned `200` after restore.
   Four expected worker Redis connection `ERROR` lines occurred during the outage;
   zero suspicious lines appeared after restoration.
-- [ ] Complete the final documentation/provenance/secret audit, local Phase 3
-  commit, push, and any remote-CI verification that is actually observed.
+- [x] Complete the final documentation/provenance/secret audit and local Phase 3
+  commit `083808c`.
 
 ## Backlog — do not implement during the current milestone
 
@@ -329,12 +329,12 @@ queued deterministic breadth without mutating that historical definition.
 No Phase 0/1/2 implementation or Phase 3 local-acceptance blocker is known. One
 upstream FastAPI/Starlette `TestClient` deprecation warning is recorded in
 `PROGRESS.md`; the full Phase 3 suite passes 158 tests. Phase 2 is pushed at
-`26c3e86`. Phase 3 is not yet committed or pushed, and no Phase 3 remote-CI result
-is claimed. Partial multi-job enqueue crash-window/outbox recovery remains Phase 4.
+`26c3e86`. Phase 3 is locally committed at `083808c` but is not pushed, and no
+Phase 3 remote-CI result is claimed. Partial multi-job enqueue crash-window/outbox
+recovery remains Phase 4.
 
 ## Precise next action
 
-Finish the unchecked documentation/secret audit, create a local Phase 3 commit if
-Git identity remains configured, push only under the user's existing authorization,
-and record only remote CI that is actually observed. Do not begin Phase 4 until the
-user explicitly advances that milestone.
+Keep Phase 3 unpushed until the user explicitly asks to publish the Phase 3
+commits, and record remote CI only if it is actually observed. Do not begin Phase 4
+until the user explicitly advances that milestone.

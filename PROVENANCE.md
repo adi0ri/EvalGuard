@@ -154,8 +154,8 @@ executions with 507/507 passing grader results across six families, 44 tool
 invocations, 164 trace events including one `tool_replay`, 7 refunds, and 5 support
 tickets. The Redis-unavailable probe kept liveness at `200`, changed readiness to
 `503`, and returned readiness to `200` after restoration. These are synthetic
-infrastructure results, not real-model quality measurements. Phase 3 remains
-uncommitted and unpushed; no Phase 3 remote-CI result is claimed.
+infrastructure results, not real-model quality measurements. Phase 3 is locally
+committed at `083808c` and unpushed; no Phase 3 remote-CI result is claimed.
 
 ### Future real provider
 
@@ -211,5 +211,7 @@ remains a Phase 5 target until generated and verified.
   158 tests passed in 52.51 seconds.
 - [x] Record the Phase 3 locked installation, clean migration, Compose
   rebuild/startup, and live 25-case smoke as synthetic infrastructure validation.
-- [ ] Record the final secret scan, Phase 3 code revision, successful push, and any
-  observed Phase 3 remote-CI result. None is claimed yet.
+- [x] Record the final high-confidence secret scan (zero matching files) and Phase
+  3 code revision `083808c`.
+- [ ] Record a successful Phase 3 push and any observed Phase 3 remote-CI result if
+  those events occur. Neither is claimed yet.

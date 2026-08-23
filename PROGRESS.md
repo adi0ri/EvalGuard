@@ -526,8 +526,9 @@ crash window remains Phase 4 work; it is not claimed by Phase 3 idempotency or
 aggregate lifecycle handling.
 
 The Phase 2 commits were pushed successfully; local `main` and its `origin/main`
-tracking ref are at `26c3e86`. Phase 3 remains uncommitted and unpushed, so no
-Phase 3 remote-CI result is claimed. The precise next action is the final durable
-documentation/provenance/secret audit, followed by a local Phase 3 commit if Git
-identity remains configured and a push under the user's existing authorization.
-Do not begin Phase 4 until the user explicitly advances it.
+tracking ref were both at `26c3e86` before the Phase 3 commit. The final
+high-confidence credential scan returned zero matching files, Git author name and
+email remained configured, and commit `083808c` records the verified Phase 3
+implementation. Phase 3 is not pushed and no Phase 3 remote-CI result is claimed.
+Keep it local until the user explicitly asks to publish these Phase 3 commits. Do
+not begin Phase 4 until the user explicitly advances it.

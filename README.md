@@ -5,8 +5,8 @@ wholly fictional ParcelDesk support domain. Phases 0–2 provide the runtime and
 correctness foundation. Phase 3 adds an immutable 25-case queued suite,
 actor-scoped tools, six deterministic grader families, deliberate fake-agent
 defects, and aggregate experiment lifecycle. The full automated suite and live
-25-case runtime smoke pass. Phase 3 remains uncommitted and unpushed, and no Phase 3
-remote-CI result is claimed.
+25-case runtime smoke pass. Phase 3 is locally committed at `083808c`; it is not
+pushed, and no Phase 3 remote-CI result is claimed.
 
 This result is **synthetic infrastructure validation**. It proves that the local
 API, queue, worker, tools, transaction, trace, grader, and retrieval path work

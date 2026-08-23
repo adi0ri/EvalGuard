@@ -24,7 +24,8 @@ ParcelDesk support domain.
   `20260822_0006` enforces that each ticket customer owns its order. Locked
   installation, static checks, clean migration round trip, Compose startup, the
   live 25-case smoke, and the Redis-unavailable readiness probe all passed. Phase 3
-  remains uncommitted and unpushed; no Phase 3 remote-CI result is claimed.
+  is locally committed at `083808c`; it is not pushed, and no Phase 3 remote-CI
+  result is claimed.
 - Do not begin Phase 4 or later work unless the user explicitly advances the
   milestone. Record later ideas in `PLAN.md` instead.
 
