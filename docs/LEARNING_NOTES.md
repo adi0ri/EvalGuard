@@ -12,8 +12,10 @@ authorized a bounded keyless real-provider implementation, which now exists with
 strict adapter contracts, durable provider turns, and scripted no-network tests.
 Its keyless local gate passed. No provider credential was available, zero paid
 calls were made, and no live-model result is claimed here. Implementation commit
-`5479c9a` and verification commit `73784c9` are published on `origin/main` without
-implying a remote-CI result.
+`5479c9a`, verification commit `73784c9`, and publication record `e301d25` are
+published on `origin/main`. Observed GitHub Actions run `32627986410` passed all
+three jobs at `e301d25`; this verifies the keyless repository workflow, not model
+quality or a paid provider run.
 
 ## Implemented concepts through Phase 6
 

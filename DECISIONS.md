@@ -797,4 +797,6 @@ portfolio demo remains fake-only. A future paid result requires an externally
 supplied worker credential and an explicitly observed run; until then EvalGuard
 records zero paid calls, no real model-quality result, and no measured provider
 bill. Implementation commit `5479c9a` and verification commit `73784c9` publish
-this keyless decision outcome without claiming remote CI or a paid result.
+this keyless decision outcome. Publication record `e301d25` triggered GitHub
+Actions run `32627986410`, whose lint/type-check, clean migration/test, and Compose
+configuration/application-image build jobs all passed. No paid result is inferred.

@@ -1306,3 +1306,28 @@ credential appeared, and no real or paid provider request was made. This durable
 publication follow-up is the final local documentation change; after it is pushed,
 the only unchecked Phase 6 result remains the externally blocked credentialed
 experiment.
+
+## Phase 6 remote CI observation — 2026-08-30
+
+The previously published documentation follow-up is commit `e301d25`
+(`docs: record Phase 6 publication`). On 2026-08-30, a read-only GitHub CLI check
+observed final-tip GitHub Actions run
+[`32627986410`](https://github.com/adi0ri/EvalGuard/actions/runs/32627986410).
+The run was created for exact SHA
+`e301d25e37e8bf4de880fabf544da1c7a19a4dfd` at 2026-08-23 08:20:11 UTC and
+completed successfully at 08:21:51 UTC. All three jobs passed:
+
+- `Lint and type-check`: locked sync, Ruff lint, 83-file formatting check, and
+  mypy over 37 source files;
+- `Migrate and test`: fresh PostgreSQL upgrade, schema-drift check, and
+  `247 passed, 1 warning in 57.17s`; and
+- `Verify Docker and Compose`: Compose configuration validation and application-
+  image build.
+
+The immediately preceding run for verification commit `73784c9` is recorded by
+GitHub as cancelled; it is not used as evidence. The later run at the final
+publication tip is the claimed Phase 6 remote result. A same-day presence-only
+host check still found no supported provider credential. This CI run used the
+keyless workflow and does not represent a paid request, live-model result, or
+provider-quality measurement. The only unchecked Phase 6 outcome remains the
+separately gated credentialed experiment.

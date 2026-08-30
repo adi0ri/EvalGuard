@@ -22,7 +22,9 @@ implementation passed its local dependency, static, PostgreSQL, migration,
 Compose, deterministic-fake smoke, and readiness gates; the separately
 credentialed result remains blocked and is not inferred from those checks.
 Implementation commit `5479c9a` and verification commit `73784c9` are published
-on `origin/main`; no Phase 6 remote-CI result is claimed.
+on `origin/main`, followed by publication record `e301d25`. GitHub Actions run
+`32627986410` passed all three jobs at `e301d25`: lint/type-check, clean PostgreSQL
+migration/tests, and Compose configuration/application-image build verification.
 
 ## Product outcome
 

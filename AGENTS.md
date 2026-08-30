@@ -75,8 +75,11 @@ ParcelDesk support domain.
   API, and provider coverage—a clean `20260823_0009` round trip with no drift,
   rebuilt Compose startup, a live deterministic-fake API/worker smoke, idempotent
   replay, and Redis readiness outage/recovery. Exact local results are in
-  `PROGRESS.md`. Implementation commit `5479c9a` and verification commit `73784c9`
-  were published on `origin/main`; publication does not imply a remote-CI result.
+  `PROGRESS.md`. Implementation commit `5479c9a`, verification commit `73784c9`,
+  and publication record `e301d25` were published on `origin/main`. GitHub Actions
+  run `32627986410` then passed all three jobs at `e301d25`: lint/type-check,
+  fresh PostgreSQL migration/tests, and Compose configuration/application-image
+  build verification.
 
 ## Engineering rules
 

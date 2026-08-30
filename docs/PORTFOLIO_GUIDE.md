@@ -164,9 +164,11 @@ cost aggregation. Its tests use scripted clients and no network. The keyless Pha
 These results prove the bounded adapter and recovery machinery locally without
 turning keyless tests into a live OpenAI result.
 
-Phase 6 implementation commit `5479c9a` and verification commit `73784c9` are
-published on `origin/main`. That publication is source availability, not evidence
-of a new remote-CI run or a credentialed OpenAI experiment.
+Phase 6 implementation commit `5479c9a`, verification commit `73784c9`, and
+publication record `e301d25` are published on `origin/main`. GitHub Actions run
+[`32627986410`](https://github.com/adi0ri/EvalGuard/actions/runs/32627986410)
+passed all three jobs at `e301d25`, including 247 tests in 57.17 seconds. This is
+keyless workflow evidence, not a credentialed OpenAI experiment.
 
 ## Reproducible demo
 

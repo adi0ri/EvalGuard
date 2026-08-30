@@ -93,7 +93,7 @@ Transitive packages remain recorded in that lockfile rather than duplicated here
 | Redis container | `redis:7-alpine` | RQ queue transport |
 | Docker / Docker Compose | 29.6.1 / 5.2.0 used for verification | Local image build and multi-process topology |
 | `actions/checkout` / `astral-sh/setup-uv` | 7.0.1 / 10.0.1, pinned by commit SHA | CI checkout and uv installation |
-| GitHub Actions | Run `32195390241` passed remotely | Historical locked checks, tests, clean migration, schema-drift check, and image build |
+| GitHub Actions | Runs `32195390241` and `32627986410` passed remotely | Historical foundation verification plus final Phase 6 lint/type-check, fresh migration/tests, schema-drift check, Compose validation, and application-image build |
 
 The OpenAI SDK is installed for the keyless-tested adapter. No credential was
 available and no real provider request was made during implementation or local
@@ -319,10 +319,14 @@ kept liveness `200` while readiness changed to `503` and then recovered to `200`
 These are local implementation and synthetic-infrastructure facts, not OpenAI
 model output. The exact commands and timing are retained in `PROGRESS.md`.
 
-Implementation commit `5479c9a` and verification commit `73784c9` were published
-to `origin/main`. Local and remote refs resolved to the same full verification SHA
-at that checkpoint. This is publication provenance only; no remote-CI or provider
-result is inferred.
+Implementation commit `5479c9a`, verification commit `73784c9`, and publication
+record `e301d25` were published to `origin/main`. Observed GitHub Actions run
+[`32627986410`](https://github.com/adi0ri/EvalGuard/actions/runs/32627986410)
+passed all three jobs at exact SHA
+`e301d25e37e8bf4de880fabf544da1c7a19a4dfd`: lint/type-check, fresh PostgreSQL
+migration plus 247 tests, and Compose configuration/application-image build
+verification. This is keyless workflow provenance only; no provider result is
+inferred.
 
 ## Metrics integrity
 
@@ -416,4 +420,6 @@ result, not evidence that the prompts are equally effective for a real model.
   printed or committed, and all real-provider results remain explicitly absent.
 - [x] Reconcile the final Phase 6 full test, migration, Compose, fake-smoke, secret
   scan, commit, and push results with `PROGRESS.md`.
+- [x] Record observed GitHub Actions run `32627986410`: all three jobs passed at
+  exact Phase 6 publication tip `e301d25`.
 - [ ] Record any observed Phase 3 remote-CI result if it occurs; none is claimed.
