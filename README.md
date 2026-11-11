@@ -20,6 +20,10 @@ docker compose exec -T api python -m evalguard.cli seed
 
 The script prints a link to an HTML comparison with **150 execution records** across two prompt configurations, three trials per case, and 25 cases per configuration. Each trial links to the underlying state, trace, and grader evidence. The demo uses a deterministic fake provider and requires no API credentials. The results validate the evaluation pipeline with synthetic data. Model quality requires a separate live-model experiment.
 
+![EvalGuard comparison report showing 75 of 75 synthetic passes in each arm](docs/assets/evalguard-comparison.png)
+
+[Demo run and verification log](https://github.com/adi0ri/EvalGuard/actions/runs/43116172854)
+
 ## Architecture
 
 ```mermaid
